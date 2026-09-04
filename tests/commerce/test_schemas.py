@@ -3,17 +3,22 @@ import pytest
 from pydantic import ValidationError
 
 from src.commerce.schemas import (
+    CandidateStatus,
     CommerceCriticRecommendation,
     CommerceCriticReview,
+    DraftReviewStatus,
+    EBayListingDraft,
     Listing,
     ListingApprovalStatus,
     ListingStatus,
     Platform,
     PlatformStatus,
+    ProductCandidate,
     ProductScoutOpportunity,
     ProfitCalculationInput,
     ProfitDecision,
     SellerListingDraft,
+    SupplierCheckRecord,
     SupplierOrder,
     SupplierOrderStatus,
     SupplierProduct,
@@ -179,4 +184,111 @@ def test_supplier_product_negative_lead_time():
             supplier_type=SupplierType.WHOLESALE,
             cost=10.0,
             lead_time_days=-1,
+        )
+
+
+def test_candidate_status_enum_values():
+    assert CandidateStatus.NEW.value == "NEW"
+    assert CandidateStatus.VERIFIED.value == "VERIFIED"
+    assert CandidateStatus.REVIEW.value == "REVIEW"
+    assert CandidateStatus.REJECTED.value == "REJECTED"
+    assert CandidateStatus.APPROVED_FOR_LISTING.value == "APPROVED_FOR_LISTING"
+
+
+def test_product_candidate_validation():
+    candidate = ProductCandidate(
+        candidate_id="CAND-001",
+        sku="SKU-001",
+        title="Test Candidate",
+        supplier_id="SUP-01",
+        supplier_cost=15.0,
+        target_price=30.0,
+    )
+    assert candidate.status == CandidateStatus.NEW
+    assert candidate.target_platform == Platform.EBAY
+
+    # Negative supplier cost raises ValidationError
+    with pytest.raises(ValidationError):
+        ProductCandidate(
+            candidate_id="CAND-002",
+            sku="SKU-002",
+            title="Invalid Candidate",
+            supplier_id="SUP-01",
+            supplier_cost=-5.0,
+            target_price=30.0,
+        )
+
+
+def test_supplier_check_record_schema():
+    check = SupplierCheckRecord(
+        candidate_id="CAND-001",
+        supplier_id="SUP-WHOLESALE",
+        sku="SKU-001",
+        supplier_type=SupplierType.WHOLESALE,
+        is_valid=True,
+        retail_dropshipping_blocked=False,
+        reason="Checks passed",
+        passed_checks=["valid_cost"],
+        warnings=[],
+    )
+    assert check.is_valid is True
+    assert check.supplier_type == SupplierType.WHOLESALE
+    assert check.retail_dropshipping_blocked is False
+
+
+def test_draft_review_status_enum_values():
+    assert DraftReviewStatus.DRAFT_CREATED.value == "DRAFT_CREATED"
+    assert DraftReviewStatus.READY_FOR_REVIEW.value == "READY_FOR_REVIEW"
+    assert DraftReviewStatus.APPROVED_TO_PUBLISH.value == "APPROVED_TO_PUBLISH"
+    assert DraftReviewStatus.REJECTED.value == "REJECTED"
+
+
+def test_ebay_listing_draft_validation_and_placeholders():
+    draft = EBayListingDraft(
+        draft_id="DRAFT-001",
+        sku="SKU-TEST-01",
+        title="Test Title",
+        price=19.99,
+        quantity=2,
+        description="Detailed description",
+        category_placeholder="Electronics > Audio",
+        shipping_placeholder="Express Shipping",
+        supplier_reference="SUP-1",
+        expected_profit=5.0,
+        expected_margin=0.25,
+    )
+    assert draft.category == "Electronics > Audio"
+    assert draft.category_placeholder == "Electronics > Audio"
+    assert draft.shipping == "Express Shipping"
+    assert draft.shipping_placeholder == "Express Shipping"
+    assert draft.SKU == "SKU-TEST-01"
+    assert draft.status == DraftReviewStatus.DRAFT_CREATED
+
+    # Human approval required cannot be False
+    with pytest.raises(ValidationError):
+        EBayListingDraft(
+            draft_id="DRAFT-002",
+            sku="SKU-TEST-02",
+            title="Invalid",
+            price=10.0,
+            description="Desc",
+            supplier_reference="SUP-1",
+            expected_profit=2.0,
+            expected_margin=0.20,
+            human_approval_required=False,
+        )
+
+    # Approved status without reviewer raises ValidationError
+    with pytest.raises(ValidationError):
+        EBayListingDraft(
+            draft_id="DRAFT-003",
+            sku="SKU-TEST-03",
+            title="Approved Without Reviewer",
+            price=10.0,
+            description="Desc",
+            supplier_reference="SUP-1",
+            expected_profit=2.0,
+            expected_margin=0.20,
+            status=DraftReviewStatus.APPROVED_TO_PUBLISH,
+            reviewed_by=None,
         )

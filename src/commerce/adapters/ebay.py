@@ -1,6 +1,8 @@
-from typing import Optional
+from typing import Optional, Union
 
 from src.commerce.schemas import (
+    DraftReviewStatus,
+    EBayListingDraft,
     Listing,
     ListingApprovalStatus,
     ListingStatus,
@@ -21,24 +23,39 @@ class EBayAdapter:
         self.status = PlatformStatus.ACTIVE
         self.is_enabled = True
 
-    def create_listing(self, draft: SellerListingDraft) -> Listing:
+    def create_listing(self, draft: Union[SellerListingDraft, EBayListingDraft]) -> Listing:
         """
-        Creates a platform listing record from a seller draft.
+        Creates a platform listing record from a seller draft or eBay listing draft.
         If draft is not human-approved, listing is marked PENDING_APPROVAL and human_approved=False.
         """
-        if (
-            draft.approval_status == ListingApprovalStatus.APPROVED
-            and draft.approved_by is not None
-        ):
+        if isinstance(draft, EBayListingDraft):
+            price = draft.price
+            quantity = draft.quantity
+            is_approved = (
+                draft.status == DraftReviewStatus.APPROVED_TO_PUBLISH
+                and draft.reviewed_by is not None
+            )
+            approved_by = draft.reviewed_by if is_approved else None
+        else:
+            price = draft.proposed_price
+            quantity = 1
+            is_approved = (
+                draft.approval_status == ListingApprovalStatus.APPROVED
+                and draft.approved_by is not None
+            )
+            approved_by = draft.approved_by if is_approved else None
+
+        if is_approved:
             return Listing(
                 listing_id=f"EBAY-DRAFT-{draft.sku}",
                 platform=Platform.EBAY,
                 sku=draft.sku,
                 title=draft.title,
-                price=draft.proposed_price,
+                price=price,
+                quantity=quantity,
                 status=ListingStatus.APPROVED,
                 human_approved=True,
-                approved_by=draft.approved_by,
+                approved_by=approved_by,
             )
 
         return Listing(
@@ -46,7 +63,8 @@ class EBayAdapter:
             platform=Platform.EBAY,
             sku=draft.sku,
             title=draft.title,
-            price=draft.proposed_price,
+            price=price,
+            quantity=quantity,
             status=ListingStatus.PENDING_APPROVAL,
             human_approved=False,
             approved_by=None,
