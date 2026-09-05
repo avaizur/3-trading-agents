@@ -61,6 +61,19 @@ class CandidateStatus(str, Enum):
     APPROVED_FOR_LISTING = "APPROVED_FOR_LISTING"
 
 
+class SupplierVerificationStatus(str, Enum):
+    PENDING = "PENDING"
+    VERIFIED = "VERIFIED"
+    REJECTED = "REJECTED"
+
+
+class SupplierProfitStatus(str, Enum):
+    VERIFIED_PROFITABLE = "VERIFIED_PROFITABLE"
+    VERIFIED_LOW_MARGIN = "VERIFIED_LOW_MARGIN"
+    SUPPLIER_REJECTED = "SUPPLIER_REJECTED"
+    NEEDS_SUPPLIER_DATA = "NEEDS_SUPPLIER_DATA"
+
+
 ProductQueueStatus = CandidateStatus
 
 
@@ -227,6 +240,7 @@ class ProductCandidate(BaseModel):
     estimated_fee: float = Field(default=0.0, ge=0)
     estimated_profit: Optional[float] = None
     estimated_margin_pct: Optional[float] = None
+    supplier_profit_status: SupplierProfitStatus = SupplierProfitStatus.NEEDS_SUPPLIER_DATA
     status: CandidateStatus = CandidateStatus.NEW
     rejection_reason: Optional[str] = None
     notes: Optional[str] = None
@@ -355,6 +369,12 @@ class EBayListingDraft(BaseModel):
             raise ValueError(
                 f"Candidate '{candidate.candidate_id}' must be in APPROVED_FOR_LISTING status "
                 f"to create an eBay listing draft (current status: {candidate.status.value})."
+            )
+        if candidate.supplier_profit_status != SupplierProfitStatus.VERIFIED_PROFITABLE:
+            raise ValueError(
+                f"Candidate '{candidate.candidate_id}' must have supplier/profit status "
+                f"VERIFIED_PROFITABLE to create an eBay listing draft (current status: "
+                f"{candidate.supplier_profit_status.value})."
             )
 
         cat = category or "General Merchandise > Default Category"

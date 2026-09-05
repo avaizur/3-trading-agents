@@ -46,11 +46,20 @@ from src.commerce.schemas import (
     ProfitDecision,
     SellerListingDraft,
     SupplierCheckRecord,
+    SupplierProfitStatus,
     SupplierOrder,
     SupplierOrderStatus,
     SupplierProduct,
     SupplierType,
     SupplierValidationResult,
+    SupplierVerificationStatus,
+)
+from src.commerce.supplier_matching import (
+    ManualSupplierInput,
+    ManualSupplierMatcher,
+    SupplierMatchInterface,
+    SupplierMatchResult,
+    verify_manual_supplier_match,
 )
 from src.commerce.seller_a import create_ebay_draft
 from src.commerce.supplier_validator import (
@@ -74,6 +83,13 @@ __all__ = [
     "ListingDraftStatus",
     "SupplierProduct",
     "SupplierValidationResult",
+    "SupplierVerificationStatus",
+    "SupplierProfitStatus",
+    "ManualSupplierInput",
+    "SupplierMatchResult",
+    "SupplierMatchInterface",
+    "ManualSupplierMatcher",
+    "verify_manual_supplier_match",
     "ProfitCalculationInput",
     "ProfitDecision",
     "ProductScoutOpportunity",

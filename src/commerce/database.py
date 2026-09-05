@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS product_candidates (
     estimated_fee REAL NOT NULL DEFAULT 0.0,
     estimated_profit REAL,
     estimated_margin_pct REAL,
+    supplier_profit_status TEXT NOT NULL DEFAULT 'NEEDS_SUPPLIER_DATA',
     status TEXT NOT NULL DEFAULT 'NEW',
     rejection_reason TEXT,
     notes TEXT,
@@ -129,6 +130,14 @@ class CommerceDatabase:
     def init_db(self) -> None:
         with self.get_connection() as conn:
             conn.executescript(COMMERCE_SCHEMA)
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(product_candidates)")
+            }
+            if "supplier_profit_status" not in columns:
+                conn.execute(
+                    "ALTER TABLE product_candidates ADD COLUMN supplier_profit_status "
+                    "TEXT NOT NULL DEFAULT 'NEEDS_SUPPLIER_DATA'"
+                )
 
     def close(self) -> None:
         if self._shared_conn is not None:
@@ -154,9 +163,9 @@ class CommerceDatabase:
                 INSERT INTO product_candidates (
                     candidate_id, sku, title, supplier_id, target_platform,
                     supplier_cost, target_price, shipping_cost, estimated_fee,
-                    estimated_profit, estimated_margin_pct, status, rejection_reason,
-                    notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    estimated_profit, estimated_margin_pct, supplier_profit_status,
+                    status, rejection_reason, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(candidate_id) DO UPDATE SET
                     sku=excluded.sku,
                     title=excluded.title,
@@ -168,6 +177,7 @@ class CommerceDatabase:
                     estimated_fee=excluded.estimated_fee,
                     estimated_profit=excluded.estimated_profit,
                     estimated_margin_pct=excluded.estimated_margin_pct,
+                    supplier_profit_status=excluded.supplier_profit_status,
                     status=excluded.status,
                     rejection_reason=excluded.rejection_reason,
                     notes=excluded.notes,
@@ -185,6 +195,7 @@ class CommerceDatabase:
                     candidate.estimated_fee,
                     candidate.estimated_profit,
                     candidate.estimated_margin_pct,
+                    candidate.supplier_profit_status.value,
                     candidate.status.value,
                     candidate.rejection_reason,
                     candidate.notes,

@@ -14,6 +14,7 @@ from src.commerce.schemas import (
     ListingStatus,
     Platform,
     ProductCandidate,
+    SupplierProfitStatus,
 )
 from src.commerce.seller_a import create_ebay_draft
 
@@ -32,6 +33,7 @@ def approved_candidate():
         estimated_fee=3.61,
         estimated_profit=7.88,
         estimated_margin_pct=0.3153,
+        supplier_profit_status=SupplierProfitStatus.VERIFIED_PROFITABLE,
         status=CandidateStatus.APPROVED_FOR_LISTING,
         notes="Approved by merchant review committee",
     )
@@ -122,6 +124,17 @@ def test_cannot_convert_new_or_rejected_candidates():
             status=invalid_status,
         )
         with pytest.raises(ValueError):
+            create_ebay_draft(candidate)
+
+
+def test_cannot_create_draft_without_verified_profitable_supplier(approved_candidate):
+    for status in (
+        SupplierProfitStatus.NEEDS_SUPPLIER_DATA,
+        SupplierProfitStatus.VERIFIED_LOW_MARGIN,
+        SupplierProfitStatus.SUPPLIER_REJECTED,
+    ):
+        candidate = approved_candidate.model_copy(update={"supplier_profit_status": status})
+        with pytest.raises(ValueError, match="VERIFIED_PROFITABLE"):
             create_ebay_draft(candidate)
 
 
