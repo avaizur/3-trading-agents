@@ -1,6 +1,13 @@
 from .calendar import SeasonalityCalendar
 from .defaults import DEFAULT_EVENT_RULES, default_retail_events
-from .models import BuyingWindowStatus, RetailEvent, SeasonalOpportunity
+from .models import (
+    BuyingWindowStatus,
+    ProductSearchFocus,
+    ProductSearchProfile,
+    RetailEvent,
+    SeasonalOpportunity,
+)
+from .profiles import DEFAULT_SEARCH_PROFILES, get_search_profile
 
 
 def get_top_seasonal_events(
@@ -20,9 +27,13 @@ def get_top_seasonal_events(
 __all__ = [
     "BuyingWindowStatus",
     "DEFAULT_EVENT_RULES",
+    "DEFAULT_SEARCH_PROFILES",
+    "ProductSearchFocus",
+    "ProductSearchProfile",
     "RetailEvent",
     "SeasonalOpportunity",
     "SeasonalityCalendar",
     "default_retail_events",
     "get_top_seasonal_events",
+    "get_search_profile",
 ]

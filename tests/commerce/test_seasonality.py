@@ -2,9 +2,11 @@ from datetime import date
 
 import pytest
 
-from src.commerce.product_scout import get_seasonal_focus
+from src.commerce.product_scout import get_current_search_focus, get_seasonal_focus
 from src.commerce.seasonality import (
     BuyingWindowStatus,
+    DEFAULT_SEARCH_PROFILES,
+    ProductSearchProfile,
     RetailEvent,
     SeasonalityCalendar,
     default_retail_events,
@@ -92,3 +94,44 @@ def test_default_calendar_after_christmas_keeps_all_events_upcoming():
 
     assert all(event.event_date >= as_of for event in events)
     assert next(event for event in events if event.key == "christmas").event_date == date(2027, 12, 25)
+
+
+def test_search_profiles_cover_every_default_event():
+    event_keys = {event.key for event in default_retail_events(date(2026, 9, 5))}
+
+    assert set(DEFAULT_SEARCH_PROFILES) == event_keys
+    for profile in DEFAULT_SEARCH_PROFILES.values():
+        assert profile.categories
+        assert profile.keywords
+        assert profile.exclusions
+        assert 1 <= profile.priority_score <= 100
+
+
+def test_product_scout_exposes_top_event_and_search_suggestions():
+    focus = get_current_search_focus(date(2026, 9, 5))
+
+    assert focus is not None
+    assert focus.event.name == "Halloween"
+    assert focus.suggested_categories == DEFAULT_SEARCH_PROFILES["halloween"].categories
+    assert focus.suggested_keywords == DEFAULT_SEARCH_PROFILES["halloween"].keywords
+    assert focus.profile.exclusions
+    assert focus.profile.priority_score == 90
+
+
+def test_product_scout_accepts_an_editable_profile_mapping():
+    custom_profile = ProductSearchProfile(
+        event_key="halloween",
+        categories=("Custom category",),
+        keywords=("custom keyword",),
+        exclusions=("custom exclusion",),
+        priority_score=42,
+    )
+
+    focus = get_current_search_focus(
+        date(2026, 9, 5),
+        profiles={"halloween": custom_profile},
+    )
+
+    assert focus is not None
+    assert focus.suggested_categories == ("Custom category",)
+    assert focus.profile.priority_score == 42

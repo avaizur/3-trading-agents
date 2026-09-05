@@ -46,3 +46,43 @@ class SeasonalOpportunity:
     def is_buying_window_open(self) -> bool:
         return self.window_status is BuyingWindowStatus.OPEN
 
+
+@dataclass(frozen=True)
+class ProductSearchProfile:
+    """Editable product-search guidance for a retail event."""
+
+    event_key: str
+    categories: tuple[str, ...]
+    keywords: tuple[str, ...]
+    exclusions: tuple[str, ...]
+    priority_score: int
+
+    def __post_init__(self) -> None:
+        if not self.event_key.strip():
+            raise ValueError("event_key must not be empty")
+        if not self.categories:
+            raise ValueError("categories must not be empty")
+        if not self.keywords:
+            raise ValueError("keywords must not be empty")
+        if not 1 <= self.priority_score <= 100:
+            raise ValueError("priority_score must be between 1 and 100")
+
+
+@dataclass(frozen=True)
+class ProductSearchFocus:
+    """The current seasonal event and its suggested search inputs."""
+
+    opportunity: SeasonalOpportunity
+    profile: ProductSearchProfile
+
+    @property
+    def event(self) -> RetailEvent:
+        return self.opportunity.event
+
+    @property
+    def suggested_categories(self) -> tuple[str, ...]:
+        return self.profile.categories
+
+    @property
+    def suggested_keywords(self) -> tuple[str, ...]:
+        return self.profile.keywords
