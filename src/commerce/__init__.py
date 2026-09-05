@@ -15,6 +15,20 @@ from src.commerce.profit_engine import (
     calculate_profit,
     evaluate_profit_from_input,
 )
+from src.commerce.listing_lifecycle import (
+    FIRST_REVIEW_DAY,
+    SECOND_REVIEW_END_DAY,
+    SECOND_REVIEW_START_DAY,
+    LifecycleAction,
+    LifecycleDecision,
+    ListingLifecycleSnapshot,
+    ListingLifecycleStatus,
+    ListingPerformance,
+    ReviewStage,
+    evaluate_lifecycle,
+    evaluate_listing_lifecycle,
+    review_stage_for,
+)
 from src.commerce.queue import (
     VALID_DRAFT_STATUS_TRANSITIONS,
     VALID_STATUS_TRANSITIONS,
@@ -101,6 +115,19 @@ __all__ = [
     "CommerceCriticReview",
     "Listing",
     "SupplierOrder",
+    # Future eBay listing lifecycle (offline recommendations only)
+    "ListingLifecycleStatus",
+    "ReviewStage",
+    "LifecycleAction",
+    "ListingPerformance",
+    "ListingLifecycleSnapshot",
+    "LifecycleDecision",
+    "FIRST_REVIEW_DAY",
+    "SECOND_REVIEW_START_DAY",
+    "SECOND_REVIEW_END_DAY",
+    "review_stage_for",
+    "evaluate_listing_lifecycle",
+    "evaluate_lifecycle",
     # Database & Persistence
     "COMMERCE_SCHEMA",
     "CommerceDatabase",
