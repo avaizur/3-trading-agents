@@ -69,18 +69,37 @@ def _select(items: list[ScoredMarketOpportunity], input_fn=input):
     return items[index - 1]
 
 
-def run(shortlist_path: str, db_path: str, *, input_fn=input) -> int:
+def run(
+    shortlist_path: str,
+    db_path: str,
+    *,
+    input_fn=input,
+    supplier_name: str | None = None,
+    supplier_sku: str | None = None,
+    supplier_cost: float | None = None,
+    shipping_cost: float | None = None,
+    stock_confirmed: int | None = None,
+    direct_ship: bool | None = None,
+    verification_status: str | None = None,
+) -> int:
     opportunity = _select(load_shortlist(shortlist_path), input_fn)
     print(f"Selected: {opportunity.listing.item_id} | {opportunity.listing.title}")
     try:
         supplier = ManualSupplierInput(
-            name=_ask("Supplier name: ", input_fn=input_fn),
-            sku=_ask("Supplier SKU: ", input_fn=input_fn),
-            cost=_ask("Unit cost: ", float, input_fn=input_fn),
-            shipping=_ask("Shipping: ", float, input_fn=input_fn),
-            stock=_ask("Stock: ", int, input_fn=input_fn),
-            direct_ship=_ask("Direct ship? [yes/no]: ", _yes_no, input_fn=input_fn),
-            verification_status=_ask(
+            name=supplier_name if supplier_name is not None else
+            _ask("Supplier name: ", input_fn=input_fn),
+            sku=supplier_sku if supplier_sku is not None else
+            _ask("Supplier SKU: ", input_fn=input_fn),
+            cost=supplier_cost if supplier_cost is not None else
+            _ask("Unit cost: ", float, input_fn=input_fn),
+            shipping=shipping_cost if shipping_cost is not None else
+            _ask("Shipping: ", float, input_fn=input_fn),
+            stock=stock_confirmed if stock_confirmed is not None else
+            _ask("Stock: ", int, input_fn=input_fn),
+            direct_ship=direct_ship if direct_ship is not None else
+            _ask("Direct ship? [yes/no]: ", _yes_no, input_fn=input_fn),
+            verification_status=verification_status.upper() if verification_status is not None else
+            _ask(
                 "Verification status [PENDING/VERIFIED/REJECTED]: ",
                 lambda value: value.upper(), input_fn=input_fn,
             ),
@@ -127,9 +146,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("shortlist", help="JSON file containing one or more scored eBay opportunities")
     parser.add_argument("--db", default="data/commerce.db", help="SQLite database path")
+    parser.add_argument("--supplier-name", help="Supplier name")
+    parser.add_argument("--supplier-sku", help="Supplier SKU")
+    parser.add_argument("--supplier-cost", type=float, help="Supplier unit cost")
+    parser.add_argument("--shipping-cost", type=float, help="Shipping cost")
+    parser.add_argument("--stock-confirmed", type=int, help="Confirmed stock quantity")
+    parser.add_argument("--direct-ship", type=_yes_no, metavar="YES_OR_NO", help="Whether the supplier direct-ships")
+    parser.add_argument(
+        "--verification-status", type=str.upper,
+        choices=("PENDING", "VERIFIED", "REJECTED"),
+        help="Manual verification status",
+    )
     args = parser.parse_args(argv)
     try:
-        return run(args.shortlist, args.db)
+        return run(
+            args.shortlist,
+            args.db,
+            supplier_name=args.supplier_name,
+            supplier_sku=args.supplier_sku,
+            supplier_cost=args.supplier_cost,
+            shipping_cost=args.shipping_cost,
+            stock_confirmed=args.stock_confirmed,
+            direct_ship=args.direct_ship,
+            verification_status=args.verification_status,
+        )
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         parser.error(str(exc))
 

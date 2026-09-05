@@ -46,6 +46,21 @@ more serialized `ScoredMarketOpportunity` records:
 python -m src.commerce.manual_supplier_cli shortlist.json --db data/commerce.db
 ```
 
+Known supplier data can be supplied non-interactively; omit any option to be
+prompted for just that value:
+
+```bash
+python -m src.commerce.manual_supplier_cli shortlist.json \
+  --db data/commerce.db \
+  --supplier-name "Go Dropship" \
+  --supplier-sku "SUPPLIER-SKU" \
+  --supplier-cost 10.00 \
+  --shipping-cost 2.99 \
+  --stock-confirmed 10 \
+  --direct-ship yes \
+  --verification-status VERIFIED
+```
+
 Create that file from read-only eBay Browse research and the existing
 opportunity scorer (requires `EBAY_ACCESS_TOKEN`):
 

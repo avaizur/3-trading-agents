@@ -1,7 +1,7 @@
 import json
 
 from src.commerce.database import CommerceDatabase
-from src.commerce.manual_supplier_cli import load_shortlist, run
+from src.commerce.manual_supplier_cli import load_shortlist, main, run
 from src.commerce.schemas import CandidateStatus, SupplierProfitStatus
 
 
@@ -69,6 +69,55 @@ def test_cli_persists_rejected_verification_without_candidate(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Expected profit: N/A" in output
     assert "Margin: N/A" in output
+
+
+def test_cli_arguments_run_supplier_verification_without_prompts(tmp_path, capsys):
+    shortlist = tmp_path / "shortlist.json"
+    database = tmp_path / "commerce.db"
+    _write_shortlist(shortlist)
+
+    exit_code = main([
+        str(shortlist), "--db", str(database),
+        "--supplier-name", "Go Dropship",
+        "--supplier-sku", "GO-42",
+        "--supplier-cost", "50",
+        "--shipping-cost", "5",
+        "--stock-confirmed", "12",
+        "--direct-ship", "yes",
+        "--verification-status", "verified",
+    ])
+
+    assert exit_code == 0
+    match = CommerceDatabase(str(database)).get_manual_supplier_matches("12345")[0]
+    assert match["supplier_name"] == "Go Dropship"
+    assert match["sku"] == "GO-42"
+    assert match["cost"] == 50.0
+    assert match["shipping"] == 5.0
+    assert match["stock"] == 12
+    assert match["direct_ship"] is True
+    assert match["verification_status"] == "VERIFIED"
+    assert "Supplier status: VERIFIED_PROFITABLE" in capsys.readouterr().out
+
+
+def test_cli_arguments_only_replace_corresponding_prompts(tmp_path):
+    shortlist = tmp_path / "shortlist.json"
+    database = tmp_path / "commerce.db"
+    _write_shortlist(shortlist)
+
+    run(
+        str(shortlist), str(database),
+        supplier_name="Go Dropship",
+        supplier_cost=50,
+        stock_confirmed=12,
+        verification_status="verified",
+        input_fn=_answers("GO-42", "5", "yes"),
+    )
+
+    match = CommerceDatabase(str(database)).get_manual_supplier_matches("12345")[0]
+    assert match["supplier_name"] == "Go Dropship"
+    assert match["sku"] == "GO-42"
+    assert match["shipping"] == 5.0
+    assert match["direct_ship"] is True
 
 
 def test_cli_selects_one_candidate_from_a_shortlist(tmp_path):
