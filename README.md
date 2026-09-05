@@ -8,6 +8,37 @@ Run tests:
 python -m pytest -q
 ```
 
+While eBay Developer API access is unavailable, create `manual-candidates.json`
+as a JSON array (or `{ "candidates": [...] }`) containing 5-10 manually
+researched eBay listings. Each listing uses these fields:
+
+```json
+{
+  "title": "Product title",
+  "item_id": "1234567890",
+  "price": "29.99",
+  "currency": "GBP",
+  "seller": "seller-name",
+  "category": "Home & Garden",
+  "item_url": "https://www.ebay.co.uk/itm/1234567890",
+  "condition": "New",
+  "availability": "IN_STOCK",
+  "end_date": null
+}
+```
+
+Score that local research with the existing opportunity scorer, without any
+live API calls:
+
+```bash
+python -m src.commerce.manual_shortlist_cli manual-candidates.json \
+  --output shortlist.json
+```
+
+The input must contain 5-10 unique eBay items. Only candidates receiving the
+existing `SHORTLIST` decision are written to `shortlist.json`. To reproduce a
+past seasonal window, pass `--as-of YYYY-MM-DD`.
+
 Run local manual supplier verification against a JSON file containing one or
 more serialized `ScoredMarketOpportunity` records:
 
