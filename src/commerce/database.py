@@ -58,6 +58,26 @@ CREATE TABLE IF NOT EXISTS supplier_checks (
 CREATE INDEX IF NOT EXISTS idx_checks_candidate_id ON supplier_checks(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_checks_supplier_id ON supplier_checks(supplier_id);
 
+CREATE TABLE IF NOT EXISTS manual_supplier_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ebay_item_id TEXT NOT NULL,
+    supplier_name TEXT,
+    sku TEXT,
+    cost REAL,
+    shipping REAL,
+    stock INTEGER,
+    direct_ship INTEGER,
+    verification_status TEXT NOT NULL,
+    supplier_status TEXT NOT NULL,
+    expected_profit REAL,
+    expected_margin REAL,
+    final_outcome TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_manual_matches_item_id
+ON manual_supplier_matches(ebay_item_id);
+
 CREATE TABLE IF NOT EXISTS ebay_listing_drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     draft_id TEXT UNIQUE NOT NULL,
@@ -369,6 +389,43 @@ class CommerceDatabase:
     ) -> Optional[SupplierCheckRecord]:
         checks = self.get_supplier_checks(candidate_id=candidate_id)
         return checks[-1] if checks else None
+
+    def record_manual_supplier_match(self, values: dict) -> int:
+        """Persist one manual verification outcome, including rejected attempts."""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO manual_supplier_matches (
+                    ebay_item_id, supplier_name, sku, cost, shipping, stock,
+                    direct_ship, verification_status, supplier_status,
+                    expected_profit, expected_margin, final_outcome, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    values["ebay_item_id"], values.get("supplier_name"),
+                    values.get("sku"), values.get("cost"), values.get("shipping"),
+                    values.get("stock"),
+                    None if values.get("direct_ship") is None
+                    else int(values["direct_ship"]),
+                    values["verification_status"], values["supplier_status"],
+                    values.get("expected_profit"), values.get("expected_margin"),
+                    values["final_outcome"], _now_iso(),
+                ),
+            )
+            return cursor.lastrowid
+
+    def get_manual_supplier_matches(self, ebay_item_id: str) -> list[dict]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM manual_supplier_matches WHERE ebay_item_id = ? "
+                "ORDER BY id ASC",
+                (ebay_item_id,),
+            ).fetchall()
+            results = [dict(row) for row in rows]
+            for result in results:
+                if result["direct_ship"] is not None:
+                    result["direct_ship"] = bool(result["direct_ship"])
+            return results
 
     def save_draft(self, draft: EBayListingDraft) -> EBayListingDraft:
         now = _now_iso()

@@ -1,0 +1,138 @@
+"""Interactive, local-only CLI for manual eBay supplier verification."""
+
+import argparse
+import json
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
+from typing import Callable, Sequence
+
+from pydantic import ValidationError
+
+from src.commerce.database import CommerceDatabase
+from src.commerce.market_research import MarketListing
+from src.commerce.opportunity_scoring import OpportunityDecision, ScoredMarketOpportunity
+from src.commerce.schemas import SupplierCheckRecord, SupplierProduct, SupplierType
+from src.commerce.supplier_matching import ManualSupplierInput, verify_manual_supplier_match
+
+
+def _opportunity(raw: dict) -> ScoredMarketOpportunity:
+    listing = dict(raw["listing"])
+    listing["price"] = Decimal(str(listing["price"]))
+    if listing.get("end_date"):
+        listing["end_date"] = datetime.fromisoformat(listing["end_date"])
+    values = dict(raw)
+    values["listing"] = MarketListing(**listing)
+    values["decision"] = OpportunityDecision(values["decision"])
+    values["reasons"] = tuple(values.get("reasons", ()))
+    opportunity = ScoredMarketOpportunity(**values)
+    if opportunity.decision is not OpportunityDecision.SHORTLIST:
+        raise ValueError("Candidate must have decision SHORTLIST.")
+    return opportunity
+
+
+def load_shortlist(path: str) -> list[ScoredMarketOpportunity]:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    rows = data if isinstance(data, list) else [data]
+    if not rows:
+        raise ValueError("Shortlist is empty.")
+    return [_opportunity(row) for row in rows]
+
+
+def _ask(prompt: str, convert: Callable = str, *, input_fn=input):
+    while True:
+        try:
+            value = input_fn(prompt).strip()
+            return convert(value)
+        except (ValueError, TypeError) as exc:
+            print(f"Invalid value: {exc}")
+
+
+def _yes_no(value: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized in {"y", "yes", "true", "1"}:
+        return True
+    if normalized in {"n", "no", "false", "0"}:
+        return False
+    raise ValueError("enter yes or no")
+
+
+def _select(items: list[ScoredMarketOpportunity], input_fn=input):
+    if len(items) == 1:
+        return items[0]
+    for index, item in enumerate(items, 1):
+        print(f"{index}. {item.listing.item_id} | {item.listing.title} | "
+              f"{item.listing.currency} {item.listing.price}")
+    index = _ask("Select candidate number: ", int, input_fn=input_fn)
+    if index < 1 or index > len(items):
+        raise ValueError("Selection is outside the shortlist.")
+    return items[index - 1]
+
+
+def run(shortlist_path: str, db_path: str, *, input_fn=input) -> int:
+    opportunity = _select(load_shortlist(shortlist_path), input_fn)
+    print(f"Selected: {opportunity.listing.item_id} | {opportunity.listing.title}")
+    try:
+        supplier = ManualSupplierInput(
+            name=_ask("Supplier name: ", input_fn=input_fn),
+            sku=_ask("Supplier SKU: ", input_fn=input_fn),
+            cost=_ask("Unit cost: ", float, input_fn=input_fn),
+            shipping=_ask("Shipping: ", float, input_fn=input_fn),
+            stock=_ask("Stock: ", int, input_fn=input_fn),
+            direct_ship=_ask("Direct ship? [yes/no]: ", _yes_no, input_fn=input_fn),
+            verification_status=_ask(
+                "Verification status [PENDING/VERIFIED/REJECTED]: ",
+                lambda value: value.upper(), input_fn=input_fn,
+            ),
+        )
+    except ValidationError as exc:
+        raise ValueError(f"Invalid supplier details: {exc}") from exc
+
+    result = verify_manual_supplier_match(opportunity, supplier)
+    profit = result.profit_decision.net_profit if result.profit_decision else None
+    margin = result.profit_decision.margin_pct if result.profit_decision else None
+    db = CommerceDatabase(db_path)
+    if result.candidate is not None:
+        db.save_candidate(result.candidate)
+    if result.candidate is not None and result.supplier_validation is not None:
+        product = SupplierProduct(
+            supplier_id=supplier.name, supplier_name=supplier.name, sku=supplier.sku,
+            title=opportunity.listing.title,
+            supplier_type=SupplierType.DIRECT if supplier.direct_ship else SupplierType.WHOLESALE,
+            cost=supplier.cost, shipping_cost=supplier.shipping,
+            inventory_count=supplier.stock, allows_reselling=True,
+        )
+        db.record_supplier_check(SupplierCheckRecord.from_validation_result(
+            product, result.supplier_validation, result.candidate.candidate_id
+        ))
+    db.record_manual_supplier_match({
+        "ebay_item_id": opportunity.listing.item_id,
+        "supplier_name": supplier.name, "sku": supplier.sku, "cost": supplier.cost,
+        "shipping": supplier.shipping, "stock": supplier.stock,
+        "direct_ship": supplier.direct_ship,
+        "verification_status": supplier.verification_status.value,
+        "supplier_status": result.status.value,
+        "expected_profit": profit, "expected_margin": margin,
+        "final_outcome": result.reason,
+    })
+
+    print(f"Supplier status: {result.status.value}")
+    print(f"Expected profit: {'N/A' if profit is None else f'{profit:.2f}'}")
+    print(f"Margin: {'N/A' if margin is None else f'{margin:.2%}'}")
+    print(f"Final outcome: {result.reason}")
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("shortlist", help="JSON file containing one or more scored eBay opportunities")
+    parser.add_argument("--db", default="data/commerce.db", help="SQLite database path")
+    args = parser.parse_args(argv)
+    try:
+        return run(args.shortlist, args.db)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        parser.error(str(exc))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
