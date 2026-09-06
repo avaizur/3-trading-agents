@@ -74,3 +74,13 @@ supplier-verification CLI and never publishes or orders anything.
 
 This command only records verification results. It does not publish listings or
 place supplier orders.
+
+After a `VERIFIED_PROFITABLE` candidate has completed the existing human review
+and reached `APPROVED_FOR_LISTING`, create and persist an eBay-ready local draft:
+
+```bash
+python -m src.commerce.ebay_listing_draft_cli --db data/commerce.db
+```
+
+Use `--candidate-id CAND-EBAY-...` to select a specific eligible candidate. The
+command prints the draft as JSON and never calls or publishes to eBay.

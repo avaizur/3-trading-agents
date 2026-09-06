@@ -9,6 +9,7 @@ from src.commerce.schemas import (
     ProductScoutOpportunity,
     SupplierCheckRecord,
     SupplierProduct,
+    clean_ebay_title,
 )
 from src.commerce.supplier_validator import validate_supplier
 
@@ -328,6 +329,29 @@ class CandidateQueue:
         candidate = self.db.get_candidate(candidate_id)
         if not candidate:
             raise KeyError(f"Candidate '{candidate_id}' not found in queue.")
+
+        if description is None or shipping is None:
+            item_id = candidate.candidate_id.removeprefix("CAND-EBAY-")
+            matches = self.db.get_manual_supplier_matches(item_id)
+            supplier = next(
+                (
+                    match for match in reversed(matches)
+                    if match.get("verification_status") == "VERIFIED"
+                    and match.get("supplier_status") == "VERIFIED_PROFITABLE"
+                ),
+                None,
+            )
+            if description is None and supplier:
+                facts = [f"Product: {clean_ebay_title(candidate.title)}"]
+                if supplier.get("supplier_name"):
+                    facts.append(f"Supplier: {supplier['supplier_name']}")
+                if supplier.get("sku"):
+                    facts.append(f"Supplier SKU: {supplier['sku']}")
+                if supplier.get("stock") is not None:
+                    facts.append(f"Supplier stock confirmed: {supplier['stock']}")
+                description = "\n".join(facts)
+            if shipping is None and supplier and supplier.get("shipping") is not None:
+                shipping = f"Supplier shipping cost: {supplier['shipping']:.2f}"
 
         draft = EBayListingDraft.from_candidate(
             candidate=candidate,

@@ -232,6 +232,7 @@ class ProductCandidate(BaseModel):
     candidate_id: str = Field(min_length=1)
     sku: str = Field(min_length=1)
     title: str = Field(min_length=1)
+    category: Optional[str] = None
     supplier_id: str = Field(min_length=1)
     target_platform: Platform = Platform.EBAY
     supplier_cost: float = Field(gt=0)
@@ -306,6 +307,19 @@ class SupplierCheckRecord(BaseModel):
         )
 
 
+def clean_ebay_title(title: str, max_length: int = 80) -> str:
+    """Normalize a persisted product title without adding product claims."""
+    import re
+
+    cleaned = re.sub(r"\s+", " ", title).strip(" |,-")
+    cleaned = re.sub(r"\s*([|,/])\s*", r" \1 ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) <= max_length:
+        return cleaned
+    shortened = cleaned[: max_length + 1].rsplit(" ", 1)[0].rstrip(" |,-/")
+    return shortened or cleaned[:max_length].rstrip()
+
+
 class EBayListingDraft(BaseModel):
     draft_id: Optional[str] = None
     candidate_id: Optional[str] = None
@@ -377,11 +391,15 @@ class EBayListingDraft(BaseModel):
                 f"{candidate.supplier_profit_status.value})."
             )
 
-        cat = category or "General Merchandise > Default Category"
+        cat = category or candidate.category or "General Merchandise > Default Category"
         shp = shipping or "Standard Shipping (Placeholder)"
         desc = (
             description
-            or f"Brand new {candidate.title}. SKU: {candidate.sku}. Fast dispatch and satisfaction guaranteed."
+            or (
+                f"Product: {clean_ebay_title(candidate.title)}\n"
+                f"Supplier: {candidate.supplier_id}\n"
+                f"Supplier SKU: {candidate.sku}"
+            )
         )
         exp_profit = (
             candidate.estimated_profit
@@ -403,7 +421,7 @@ class EBayListingDraft(BaseModel):
         return cls(
             draft_id=f"DRAFT-EBAY-{candidate.sku}",
             candidate_id=candidate.candidate_id,
-            title=candidate.title,
+            title=clean_ebay_title(candidate.title),
             sku=candidate.sku,
             price=candidate.target_price,
             quantity=quantity,
@@ -418,7 +436,6 @@ class EBayListingDraft(BaseModel):
             status=DraftReviewStatus.DRAFT_CREATED,
             human_approval_required=True,
         )
-
     def to_seller_draft(self, agent_name: str = "seller_a") -> "SellerListingDraft":
         approval = (
             ListingApprovalStatus.APPROVED

@@ -85,6 +85,7 @@ class ManualSupplierMatcher:
             candidate_id=f"CAND-EBAY-{listing.item_id}",
             sku=supplier.sku,
             title=listing.title,
+            category=listing.category,
             supplier_id=supplier.name,
             target_platform=Platform.EBAY,
             supplier_cost=supplier.cost,

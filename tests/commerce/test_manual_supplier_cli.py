@@ -120,6 +120,52 @@ def test_cli_arguments_only_replace_corresponding_prompts(tmp_path):
     assert match["direct_ship"] is True
 
 
+def test_verified_profitable_candidate_reuses_supplier_data_and_enters_review(
+    tmp_path, capsys,
+):
+    shortlist = tmp_path / "shortlist.json"
+    database = tmp_path / "commerce.db"
+    candidate_id = "CAND-EBAY-394269786084"
+    _write_shortlist(shortlist, item_id="394269786084")
+    run(str(shortlist), str(database), input_fn=_answers(
+        "Acme Wholesale", "ACME-42", "50", "5", "12", "yes", "verified",
+    ))
+
+    def unexpected_prompt(prompt):
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    run(str(shortlist), str(database), input_fn=unexpected_prompt)
+
+    # Use a new database handle to prove the queue transition was persisted.
+    candidate = CommerceDatabase(str(database)).get_candidate(candidate_id)
+    assert candidate.status is CandidateStatus.REVIEW
+    output = capsys.readouterr().out
+    assert "Loaded persisted supplier data" in output
+    assert "human approval is still required" in output
+
+
+def test_verified_candidate_still_prompts_when_supplier_match_is_missing(tmp_path):
+    shortlist = tmp_path / "shortlist.json"
+    database = tmp_path / "commerce.db"
+    _write_shortlist(shortlist)
+    run(str(shortlist), str(database), input_fn=_answers(
+        "Acme Wholesale", "ACME-42", "50", "5", "12", "yes", "verified",
+    ))
+    db = CommerceDatabase(str(database))
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM manual_supplier_matches")
+
+    prompts = []
+    answers = iter(("Acme Wholesale", "ACME-42", "50", "5", "12", "yes", "verified"))
+
+    def answer(prompt):
+        prompts.append(prompt)
+        return next(answers)
+
+    run(str(shortlist), str(database), input_fn=answer)
+    assert "Supplier name: " in prompts
+
+
 def test_cli_selects_one_candidate_from_a_shortlist(tmp_path):
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"

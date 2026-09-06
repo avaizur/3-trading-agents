@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS product_candidates (
     candidate_id TEXT UNIQUE NOT NULL,
     sku TEXT NOT NULL,
     title TEXT NOT NULL,
+    category TEXT,
     supplier_id TEXT NOT NULL,
     target_platform TEXT NOT NULL DEFAULT 'EBAY',
     supplier_cost REAL NOT NULL,
@@ -158,6 +159,8 @@ class CommerceDatabase:
                     "ALTER TABLE product_candidates ADD COLUMN supplier_profit_status "
                     "TEXT NOT NULL DEFAULT 'NEEDS_SUPPLIER_DATA'"
                 )
+            if "category" not in columns:
+                conn.execute("ALTER TABLE product_candidates ADD COLUMN category TEXT")
 
     def close(self) -> None:
         if self._shared_conn is not None:
@@ -181,14 +184,15 @@ class CommerceDatabase:
             cursor = conn.execute(
                 """
                 INSERT INTO product_candidates (
-                    candidate_id, sku, title, supplier_id, target_platform,
+                    candidate_id, sku, title, category, supplier_id, target_platform,
                     supplier_cost, target_price, shipping_cost, estimated_fee,
                     estimated_profit, estimated_margin_pct, supplier_profit_status,
                     status, rejection_reason, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(candidate_id) DO UPDATE SET
                     sku=excluded.sku,
                     title=excluded.title,
+                    category=excluded.category,
                     supplier_id=excluded.supplier_id,
                     target_platform=excluded.target_platform,
                     supplier_cost=excluded.supplier_cost,
@@ -207,6 +211,7 @@ class CommerceDatabase:
                     candidate.candidate_id,
                     candidate.sku,
                     candidate.title,
+                    candidate.category,
                     candidate.supplier_id,
                     candidate.target_platform.value,
                     candidate.supplier_cost,

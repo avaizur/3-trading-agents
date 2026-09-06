@@ -12,7 +12,14 @@ from pydantic import ValidationError
 from src.commerce.database import CommerceDatabase
 from src.commerce.market_research import MarketListing
 from src.commerce.opportunity_scoring import OpportunityDecision, ScoredMarketOpportunity
-from src.commerce.schemas import SupplierCheckRecord, SupplierProduct, SupplierType
+from src.commerce.queue import CandidateQueue
+from src.commerce.schemas import (
+    CandidateStatus,
+    SupplierCheckRecord,
+    SupplierProduct,
+    SupplierProfitStatus,
+    SupplierType,
+)
 from src.commerce.supplier_matching import ManualSupplierInput, verify_manual_supplier_match
 
 
@@ -84,24 +91,57 @@ def run(
 ) -> int:
     opportunity = _select(load_shortlist(shortlist_path), input_fn)
     print(f"Selected: {opportunity.listing.item_id} | {opportunity.listing.title}")
+    db = CommerceDatabase(db_path)
+    candidate_id = f"CAND-EBAY-{opportunity.listing.item_id}"
+    existing_candidate = db.get_candidate(candidate_id)
+    is_verified_reverification = (
+        existing_candidate is not None
+        and existing_candidate.status == CandidateStatus.VERIFIED
+    )
+    persisted_supplier = None
+    if (
+        existing_candidate is not None
+        and existing_candidate.supplier_profit_status
+        is SupplierProfitStatus.VERIFIED_PROFITABLE
+    ):
+        matches = db.get_manual_supplier_matches(opportunity.listing.item_id)
+        complete_matches = [
+            match for match in matches
+            if match["supplier_status"] == SupplierProfitStatus.VERIFIED_PROFITABLE.value
+            and match["verification_status"] == "VERIFIED"
+            and all(match[field] is not None for field in (
+                "supplier_name", "sku", "cost", "shipping", "stock", "direct_ship",
+            ))
+        ]
+        if complete_matches:
+            persisted_supplier = complete_matches[-1]
+            print("Loaded persisted supplier data for verified profitable candidate.")
+
+    def supplied(explicit, persisted_key, prompt, convert=str):
+        if explicit is not None:
+            return explicit
+        if persisted_supplier is not None:
+            return persisted_supplier[persisted_key]
+        return _ask(prompt, convert, input_fn=input_fn)
+
     try:
         supplier = ManualSupplierInput(
-            name=supplier_name if supplier_name is not None else
-            _ask("Supplier name: ", input_fn=input_fn),
-            sku=supplier_sku if supplier_sku is not None else
-            _ask("Supplier SKU: ", input_fn=input_fn),
-            cost=supplier_cost if supplier_cost is not None else
-            _ask("Unit cost: ", float, input_fn=input_fn),
-            shipping=shipping_cost if shipping_cost is not None else
-            _ask("Shipping: ", float, input_fn=input_fn),
-            stock=stock_confirmed if stock_confirmed is not None else
-            _ask("Stock: ", int, input_fn=input_fn),
-            direct_ship=direct_ship if direct_ship is not None else
-            _ask("Direct ship? [yes/no]: ", _yes_no, input_fn=input_fn),
-            verification_status=verification_status.upper() if verification_status is not None else
-            _ask(
-                "Verification status [PENDING/VERIFIED/REJECTED]: ",
-                lambda value: value.upper(), input_fn=input_fn,
+            name=supplied(supplier_name, "supplier_name", "Supplier name: "),
+            sku=supplied(supplier_sku, "sku", "Supplier SKU: "),
+            cost=supplied(supplier_cost, "cost", "Unit cost: ", float),
+            shipping=supplied(shipping_cost, "shipping", "Shipping: ", float),
+            stock=supplied(stock_confirmed, "stock", "Stock: ", int),
+            direct_ship=supplied(
+                direct_ship, "direct_ship", "Direct ship? [yes/no]: ", _yes_no,
+            ),
+            verification_status=(
+                verification_status.upper() if verification_status is not None
+                else persisted_supplier["verification_status"]
+                if persisted_supplier is not None
+                else _ask(
+                    "Verification status [PENDING/VERIFIED/REJECTED]: ",
+                    lambda value: value.upper(), input_fn=input_fn,
+                )
             ),
         )
     except ValidationError as exc:
@@ -110,9 +150,25 @@ def run(
     result = verify_manual_supplier_match(opportunity, supplier)
     profit = result.profit_decision.net_profit if result.profit_decision else None
     margin = result.profit_decision.margin_pct if result.profit_decision else None
-    db = CommerceDatabase(db_path)
+    current = None
     if result.candidate is not None:
-        db.save_candidate(result.candidate)
+        if existing_candidate is not None:
+            # Supplier verification must not rewind the separate human-review lifecycle.
+            result.candidate.status = existing_candidate.status
+            result.candidate.notes = existing_candidate.notes
+            result.candidate.rejection_reason = existing_candidate.rejection_reason
+        current = db.save_candidate(result.candidate)
+        if (
+            is_verified_reverification
+            and result.status == SupplierProfitStatus.VERIFIED_PROFITABLE
+        ):
+            current = CandidateQueue(db=db).submit_for_review(
+                candidate_id,
+                notes=(
+                    "Supplier and profit already verified; awaiting human listing "
+                    "approval."
+                ),
+            )
     if result.candidate is not None and result.supplier_validation is not None:
         product = SupplierProduct(
             supplier_id=supplier.name, supplier_name=supplier.name, sku=supplier.sku,
@@ -139,6 +195,11 @@ def run(
     print(f"Expected profit: {'N/A' if profit is None else f'{profit:.2f}'}")
     print(f"Margin: {'N/A' if margin is None else f'{margin:.2%}'}")
     print(f"Final outcome: {result.reason}")
+    if current is not None and current.status is not CandidateStatus.APPROVED_FOR_LISTING:
+        print(
+            f"Candidate status: {current.status.value}; not APPROVED_FOR_LISTING "
+            "because human approval is still required."
+        )
     return 0
 
 
