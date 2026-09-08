@@ -52,6 +52,7 @@ def test_export_shortlist_writes_ranked_manual_verification_records(tmp_path):
     assert set(raw[0]) == {
         "listing", "seasonal_relevance", "price_attractiveness",
         "competition_density", "signal_quality", "data_completeness",
+        "trend_demand", "profit_potential", "return_risk", "supplier_reliability",
         "overall_score", "decision", "reasons",
     }
     assert set(raw[0]["listing"]) == {

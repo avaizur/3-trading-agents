@@ -14,6 +14,7 @@ from src.commerce.market_research import MarketListing
 from src.commerce.opportunity_scoring import (
     MarketOpportunityScorer,
     OpportunityDecision,
+    ScoredMarketOpportunity,
     shortlist_candidates,
 )
 from src.commerce.product_scout import get_current_search_focus
@@ -22,6 +23,28 @@ from src.commerce.shortlist_cli import _json_value
 
 MIN_CANDIDATES = 5
 MAX_CANDIDATES = 10
+
+
+def _print_diagnostic(opportunity: ScoredMarketOpportunity) -> None:
+    if opportunity.decision is OpportunityDecision.SHORTLIST:
+        reason = "meets shortlist threshold (75)"
+    elif opportunity.decision is OpportunityDecision.NEAR_SHORTLIST:
+        reason = "within 3 points of shortlist threshold (75)"
+    elif opportunity.decision is OpportunityDecision.WATCH:
+        reason = "below near-shortlist threshold (72)"
+    else:
+        reason = "below watch threshold (50)"
+    scores = opportunity.component_scores
+    print(
+        f"Candidate {opportunity.listing.item_id}: {opportunity.listing.title}\n"
+        f"  seasonal relevance: {scores['seasonal_relevance']}/100\n"
+        f"  trend/demand: {scores['trend_demand']}/100\n"
+        f"  profit potential: {scores['profit_potential']}/100\n"
+        f"  return risk: {scores['return_risk']}/100 (higher = lower risk)\n"
+        f"  supplier reliability: {scores['supplier_reliability']}/100\n"
+        f"  overall score: {opportunity.overall_score}/100\n"
+        f"  final decision: {opportunity.decision.value} ({reason})"
+    )
 
 
 def _listing(raw: dict) -> MarketListing:
@@ -77,6 +100,23 @@ def score_manual_candidates(
     if focus is None:
         raise ValueError("No seasonal product search focus is available for this date.")
     scored = MarketOpportunityScorer().score_candidates(listings, focus)
+    for opportunity in scored:
+        _print_diagnostic(opportunity)
+    near_shortlist = shortlist_candidates(
+        [
+            opportunity
+            for opportunity in scored
+            if opportunity.decision is OpportunityDecision.NEAR_SHORTLIST
+        ],
+        MAX_CANDIDATES,
+    )
+    if near_shortlist:
+        print("\nNEAR_SHORTLIST candidates (reported only; not exported):")
+        for opportunity in near_shortlist:
+            print(
+                f"  {opportunity.listing.item_id}: "
+                f"{opportunity.overall_score}/100 - {opportunity.listing.title}"
+            )
     eligible = [
         opportunity
         for opportunity in scored

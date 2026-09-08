@@ -9,6 +9,7 @@ from src.commerce.seasonality import ProductSearchFocus
 
 class OpportunityDecision(str, Enum):
     SHORTLIST = "SHORTLIST"
+    NEAR_SHORTLIST = "NEAR_SHORTLIST"
     WATCH = "WATCH"
     REJECT = "REJECT"
 
@@ -24,15 +25,19 @@ class ScoredMarketOpportunity:
     overall_score: int
     decision: OpportunityDecision
     reasons: tuple[str, ...]
+    trend_demand: int = 50
+    profit_potential: int = 50
+    return_risk: int = 50
+    supplier_reliability: int = 50
 
     @property
     def component_scores(self) -> dict[str, int]:
         return {
             "seasonal_relevance": self.seasonal_relevance,
-            "price_attractiveness": self.price_attractiveness,
-            "competition_density": self.competition_density,
-            "signal_quality": self.signal_quality,
-            "data_completeness": self.data_completeness,
+            "trend_demand": self.trend_demand,
+            "profit_potential": self.profit_potential,
+            "return_risk": self.return_risk,
+            "supplier_reliability": self.supplier_reliability,
         }
 
 
@@ -40,13 +45,14 @@ class MarketOpportunityScorer:
     """Deterministic scoring of normalized marketplace research results."""
 
     WEIGHTS = {
-        "seasonal_relevance": 0.30,
-        "price_attractiveness": 0.25,
-        "competition_density": 0.15,
-        "signal_quality": 0.15,
-        "data_completeness": 0.15,
+        "seasonal_relevance": 0.25,
+        "trend_demand": 0.15,
+        "profit_potential": 0.25,
+        "return_risk": 0.20,
+        "supplier_reliability": 0.15,
     }
     SHORTLIST_THRESHOLD = 75
+    NEAR_SHORTLIST_THRESHOLD = 72
     WATCH_THRESHOLD = 50
 
     def score_candidates(
@@ -70,12 +76,16 @@ class MarketOpportunityScorer:
         competition = max(0, 100 - ((density_count - 1) * 15))
         signal = self._signal_quality(listing)
         completeness = self._data_completeness(listing)
+        trend = self._trend_demand(listing)
+        profit = _score((price * 0.60) + (competition * 0.40))
+        return_risk = self._return_risk(listing)
+        supplier = _score((signal * 0.60) + (completeness * 0.40))
         components = {
             "seasonal_relevance": seasonal,
-            "price_attractiveness": price,
-            "competition_density": competition,
-            "signal_quality": signal,
-            "data_completeness": completeness,
+            "trend_demand": trend,
+            "profit_potential": profit,
+            "return_risk": return_risk,
+            "supplier_reliability": supplier,
         }
         overall = _score(
             sum(components[name] * weight for name, weight in self.WEIGHTS.items())
@@ -83,6 +93,10 @@ class MarketOpportunityScorer:
         decision = self._decision(overall)
         reasons = (
             f"Seasonal relevance {seasonal}/100 based on profile term overlap and priority.",
+            f"Trend/demand {trend}/100; no historical demand data is available, so this is neutral.",
+            f"Profit potential {profit}/100 based on relative price and competition.",
+            f"Low-return-risk score {return_risk}/100 based on product traits and category.",
+            f"Supplier reliability proxy {supplier}/100 based on seller/listing evidence.",
             f"Price attractiveness {price}/100 within same-currency results.",
             f"Competition score {competition}/100 across {density_count} comparable listing(s).",
             f"Seller/listing signal quality {signal}/100.",
@@ -91,11 +105,39 @@ class MarketOpportunityScorer:
         )
         return ScoredMarketOpportunity(
             listing=listing,
+            price_attractiveness=price,
+            competition_density=competition,
+            signal_quality=signal,
+            data_completeness=completeness,
             overall_score=overall,
             decision=decision,
             reasons=reasons,
             **components,
         )
+
+    @staticmethod
+    def _trend_demand(listing):
+        # MarketListing currently contains no sales history, views, watchers, or
+        # time-series observations. Listing counts measure supply, not demand.
+        return 50
+
+    @staticmethod
+    def _return_risk(listing):
+        """Score higher for products whose traits make returns less likely."""
+        text = f"{listing.title} {listing.category or ''}".casefold()
+        score = 85
+        penalties = (
+            (35, ("clothing", "apparel", "dress", "shirt", "trouser", "jeans", "jacket", "coat")),
+            (35, ("shoe", "shoes", "footwear", "trainer", "sneaker", "boot")),
+            (30, ("fragile", "glass", "ceramic", "porcelain", "mirror", "crystal")),
+            (30, ("laptop", "computer", "smartphone", "tablet", "camera", "console", "drone")),
+            (25, ("compatible", "compatibility", "replacement part", "adapter", "cartridge", "case for")),
+            (20, ("size", "sized", "fit", "personalised", "personalized", "custom", "colour choice", "color choice")),
+        )
+        for penalty, terms in penalties:
+            if any(term in text for term in terms):
+                score -= penalty
+        return _score(score)
 
     @staticmethod
     def _seasonal_relevance(listing, focus):
@@ -165,6 +207,8 @@ class MarketOpportunityScorer:
     def _decision(self, overall_score):
         if overall_score >= self.SHORTLIST_THRESHOLD:
             return OpportunityDecision.SHORTLIST
+        if overall_score >= self.NEAR_SHORTLIST_THRESHOLD:
+            return OpportunityDecision.NEAR_SHORTLIST
         if overall_score >= self.WATCH_THRESHOLD:
             return OpportunityDecision.WATCH
         return OpportunityDecision.REJECT

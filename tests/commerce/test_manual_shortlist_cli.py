@@ -7,6 +7,7 @@ from src.commerce.manual_shortlist_cli import (
     load_manual_candidates,
     score_manual_candidates,
 )
+from src.commerce.opportunity_scoring import OpportunityDecision, ScoredMarketOpportunity
 from src.commerce.database import CommerceDatabase
 from src.commerce.manual_supplier_cli import load_shortlist, run
 from src.commerce.schemas import CandidateStatus, SupplierProfitStatus
@@ -47,10 +48,81 @@ def test_manual_candidates_use_existing_scorer_and_supplier_input_format(tmp_pat
     supplier_ready = load_shortlist(str(output))
     assert count == len(raw) == len(supplier_ready) == 5
     assert all(row["decision"] == "SHORTLIST" for row in raw)
-    assert all(len(row["reasons"]) == 6 for row in raw)
+    assert all(len(row["reasons"]) == 10 for row in raw)
     assert [row["overall_score"] for row in raw] == sorted(
         (row["overall_score"] for row in raw), reverse=True
     )
+
+
+def test_manual_candidates_print_scores_and_rejection_reason(tmp_path, capsys):
+    source = tmp_path / "manual.json"
+    output = tmp_path / "shortlist.json"
+    rows = [_candidate(index) for index in range(5)]
+    for row in rows:
+        row["title"] = "Unrelated product"
+        row["category"] = "Other"
+    _write(source, rows)
+
+    count = score_manual_candidates(source, output, as_of=date(2026, 9, 5))
+
+    diagnostic = capsys.readouterr().out
+    assert count == 0
+    assert diagnostic.count("Candidate ") == 5
+    for label in (
+        "seasonal relevance",
+        "trend/demand",
+        "profit potential",
+        "return risk",
+        "supplier reliability",
+        "overall score",
+        "final decision: REJECT (below watch threshold (50))",
+    ):
+        assert label in diagnostic
+
+
+def test_near_shortlist_is_reported_separately_but_not_exported(
+    tmp_path, capsys, monkeypatch
+):
+    source = tmp_path / "manual.json"
+    output = tmp_path / "shortlist.json"
+    rows = [_candidate(index) for index in range(5)]
+    _write(source, rows)
+
+    def scored(_scorer, listings, _focus):
+        results = []
+        for index, listing in enumerate(listings):
+            score = 74 if index == 0 else 75
+            results.append(ScoredMarketOpportunity(
+                listing=listing,
+                seasonal_relevance=score,
+                price_attractiveness=score,
+                competition_density=score,
+                signal_quality=score,
+                data_completeness=score,
+                overall_score=score,
+                decision=(OpportunityDecision.NEAR_SHORTLIST if index == 0
+                          else OpportunityDecision.SHORTLIST),
+                reasons=(),
+                trend_demand=score,
+                profit_potential=score,
+                return_risk=score,
+                supplier_reliability=score,
+            ))
+        return results
+
+    monkeypatch.setattr(
+        "src.commerce.manual_shortlist_cli.MarketOpportunityScorer.score_candidates",
+        scored,
+    )
+
+    count = score_manual_candidates(source, output, as_of=date(2026, 9, 5))
+
+    exported = json.loads(output.read_text(encoding="utf-8"))
+    diagnostic = capsys.readouterr().out
+    assert count == len(exported) == 4
+    assert all(row["decision"] == "SHORTLIST" for row in exported)
+    assert "NEAR_SHORTLIST candidates (reported only; not exported):" in diagnostic
+    assert "0: 74/100" in diagnostic
 
 
 def test_one_manual_product_runs_through_existing_supplier_profit_flow(tmp_path):

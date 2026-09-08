@@ -54,10 +54,10 @@ def test_scoring_is_deterministic_and_components_are_bounded():
     for result in first:
         assert set(result.component_scores) == {
             "seasonal_relevance",
-            "price_attractiveness",
-            "competition_density",
-            "signal_quality",
-            "data_completeness",
+            "trend_demand",
+            "profit_potential",
+            "return_risk",
+            "supplier_reliability",
         }
         assert all(
             0 <= component <= 100
@@ -67,6 +67,10 @@ def test_scoring_is_deterministic_and_components_are_bounded():
                 result.competition_density,
                 result.signal_quality,
                 result.data_completeness,
+                result.trend_demand,
+                result.profit_potential,
+                result.return_risk,
+                result.supplier_reliability,
                 result.overall_score,
             )
         )
@@ -106,9 +110,49 @@ def test_decision_thresholds_are_fixed():
     scorer = MarketOpportunityScorer()
 
     assert scorer._decision(75) is OpportunityDecision.SHORTLIST
-    assert scorer._decision(74) is OpportunityDecision.WATCH
+    assert scorer._decision(74) is OpportunityDecision.NEAR_SHORTLIST
+    assert scorer._decision(72) is OpportunityDecision.NEAR_SHORTLIST
+    assert scorer._decision(71) is OpportunityDecision.WATCH
     assert scorer._decision(50) is OpportunityDecision.WATCH
     assert scorer._decision(49) is OpportunityDecision.REJECT
+
+
+def test_return_risk_prefers_simple_products_and_penalizes_risky_traits():
+    scorer = MarketOpportunityScorer()
+    simple = listing("simple", "Wooden desk organiser", "10", category="Home Office")
+    clothing = listing("clothes", "Personalised dress size 12", "10", category="Clothing")
+    fragile = listing("fragile", "Glass mirror", "10", category="Home Decor")
+    electronics = listing("tech", "Laptop replacement adapter", "10", category="Computers")
+    footwear = listing("shoes", "Trainers colour choice", "10", category="Shoes")
+
+    assert scorer._return_risk(simple) == 85
+    assert scorer._return_risk(clothing) < scorer._return_risk(simple)
+    assert scorer._return_risk(fragile) < scorer._return_risk(simple)
+    assert scorer._return_risk(electronics) < scorer._return_risk(simple)
+    assert scorer._return_risk(footwear) < scorer._return_risk(simple)
+
+
+def test_trend_is_neutral_without_historical_demand_data():
+    focus = get_current_search_focus(date(2026, 9, 5))
+    assert focus is not None
+
+    result = MarketOpportunityScorer().score_candidates(
+        [listing("one", "Pumpkin decoration", "10")], focus
+    )[0]
+
+    assert result.trend_demand == 50
+    assert "neutral" in result.reasons[1]
+
+
+def test_overall_score_uses_the_five_business_components():
+    assert MarketOpportunityScorer.WEIGHTS == {
+        "seasonal_relevance": 0.25,
+        "trend_demand": 0.15,
+        "profit_potential": 0.25,
+        "return_risk": 0.20,
+        "supplier_reliability": 0.15,
+    }
+    assert sum(MarketOpportunityScorer.WEIGHTS.values()) == pytest.approx(1.0)
 
 
 def test_shortlist_returns_top_n_with_stable_ties():
