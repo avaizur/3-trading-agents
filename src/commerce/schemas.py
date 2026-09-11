@@ -74,6 +74,90 @@ class SupplierProfitStatus(str, Enum):
     NEEDS_SUPPLIER_DATA = "NEEDS_SUPPLIER_DATA"
 
 
+class ProductLane(str, Enum):
+    EVERGREEN = "EVERGREEN"
+    SEASONAL = "SEASONAL"
+
+
+class MarketValidationStatus(str, Enum):
+    PENDING = "PENDING"
+    PASS = "PASS"
+    REJECT = "REJECT"
+
+
+class SupplierMarketValidationInput(BaseModel):
+    supplier_name: str = Field(min_length=1)
+    supplier_sku: str = Field(min_length=1)
+    marketplace_sale_price: float = Field(gt=0)
+    platform_fee_estimate: float = Field(ge=0)
+    return_allowance: float = Field(ge=0)
+
+
+class SupplierMarketValidationResult(BaseModel):
+    id: Optional[int] = None
+    supplier_name: str = Field(min_length=1)
+    supplier_sku: str = Field(min_length=1)
+    marketplace_sale_price: float = Field(gt=0)
+    platform_fee_estimate: float = Field(ge=0)
+    return_allowance: float = Field(ge=0)
+    expected_profit: float
+    expected_margin: float
+    status: MarketValidationStatus
+    reason: str = Field(min_length=1)
+    validated_at: Optional[datetime] = None
+
+
+class SupplierBackedProduct(BaseModel):
+    """A locked supplier product awaiting independently validated economics."""
+
+    id: Optional[int] = None
+    supplier_name: str = Field(min_length=1)
+    supplier_sku: str = Field(min_length=1)
+    product_name: str = Field(min_length=1)
+    supplier_cost: float = Field(gt=0)
+    lane: ProductLane
+    market_price: Optional[float] = Field(default=None, gt=0)
+    platform_fees: Optional[float] = Field(default=None, ge=0)
+    return_allowance: Optional[float] = Field(default=None, ge=0)
+    market_price_validated: bool = False
+    platform_fees_validated: bool = False
+    return_allowance_validated: bool = False
+    expected_profit: Optional[float] = None
+    expected_margin: Optional[float] = None
+    market_validation_status: MarketValidationStatus = MarketValidationStatus.PENDING
+    validation_reason: Optional[str] = None
+    profitable: bool = False
+    auto_approved: bool = False
+    published: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def enforce_import_guardrails(self):
+        validations = (
+            self.market_price_validated,
+            self.platform_fees_validated,
+            self.return_allowance_validated,
+        )
+        if self.profitable and not all(validations):
+            raise ValueError(
+                "profitability requires validated market price, platform fees, "
+                "and return allowance"
+            )
+        if self.market_validation_status is not MarketValidationStatus.PENDING:
+            if not all(validations):
+                raise ValueError("PASS/REJECT requires all market inputs to be validated")
+            if self.profitable != (
+                self.market_validation_status is MarketValidationStatus.PASS
+            ):
+                raise ValueError("profitability must match the market validation result")
+        if self.auto_approved:
+            raise ValueError("supplier-backed products cannot be auto-approved")
+        if self.published:
+            raise ValueError("supplier-backed products cannot be published")
+        return self
+
+
 ProductQueueStatus = CandidateStatus
 
 

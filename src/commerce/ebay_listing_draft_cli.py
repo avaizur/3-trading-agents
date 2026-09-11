@@ -14,13 +14,16 @@ from src.commerce.schemas import (
 
 
 def _select_candidate(
-    queue: CandidateQueue, candidate_id: str | None = None
+    queue: CandidateQueue, candidate_id: str | None = None, sku: str | None = None
 ) -> ProductCandidate:
-    candidates = (
-        [queue.get_candidate(candidate_id)]
-        if candidate_id is not None
-        else queue.get_queue(limit=10_000)
-    )
+    if candidate_id is not None:
+        candidates = [queue.get_candidate(candidate_id)]
+    elif sku is not None:
+        candidates = queue.db.get_candidates_by_sku(sku)
+        if len(candidates) > 1:
+            raise ValueError(f"SKU '{sku}' is ambiguous; use --candidate-id.")
+    else:
+        candidates = queue.get_queue(limit=10_000)
     candidates = [candidate for candidate in candidates if candidate is not None]
     eligible = [
         candidate
@@ -33,7 +36,8 @@ def _select_candidate(
     if eligible:
         return eligible[0]
 
-    target = f" '{candidate_id}'" if candidate_id else ""
+    selected = candidate_id or sku
+    target = f" '{selected}'" if selected else ""
     raise ValueError(
         f"No eligible candidate{target}: an eBay draft requires "
         "target platform EBAY, VERIFIED_PROFITABLE supplier economics, and "
@@ -49,11 +53,12 @@ def create_listing_draft(
     db_path: str = "data/commerce.db",
     *,
     candidate_id: str | None = None,
+    sku: str | None = None,
     quantity: int = 1,
 ) -> dict:
     """Select an eligible local candidate, persist its draft, and return output data."""
     queue = CandidateQueue(db_path=db_path)
-    candidate = _select_candidate(queue, candidate_id)
+    candidate = _select_candidate(queue, candidate_id, sku)
     draft = queue.create_ebay_draft(candidate.candidate_id, quantity=quantity)
 
     supplier_name = candidate.supplier_id
@@ -81,13 +86,16 @@ def create_listing_draft(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="data/commerce.db", help="SQLite database path")
-    parser.add_argument("--candidate-id", help="Specific commerce candidate ID")
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("--candidate-id", help="Specific commerce candidate ID")
+    target.add_argument("--sku", help="Specific unique supplier SKU")
     parser.add_argument("--quantity", type=int, default=1, help="Draft quantity")
     args = parser.parse_args(argv)
     try:
         payload = create_listing_draft(
             args.db,
             candidate_id=args.candidate_id,
+            sku=args.sku,
             quantity=args.quantity,
         )
     except (KeyError, OSError, ValueError) as exc:

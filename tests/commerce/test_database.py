@@ -26,6 +26,8 @@ def test_database_initialises(tmp_path):
     assert "product_candidates" in tables
     assert "supplier_checks" in tables
     assert "manual_supplier_matches" in tables
+    assert "supplier_backed_products" in tables
+    assert "supplier_market_validations" in tables
 
 
 def test_save_and_get_candidate(tmp_path):

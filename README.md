@@ -8,6 +8,48 @@ Run tests:
 python -m pytest -q
 ```
 
+Import the locked Go Dropship supplier batch into the commerce database:
+
+```bash
+python -m src.commerce.supplier_batch_import --db data/commerce.db
+```
+
+This idempotent import stores supplier SKU, name, cost, and the `EVERGREEN` or
+`SEASONAL` lane. Products remain unprofitable and unapproved, with no listing or
+publishing action, until market price, platform fees, and return allowance have
+all been independently validated.
+
+Batch-validate staged products from confirmed marketplace inputs:
+
+```bash
+python -m src.commerce.market_validation_cli market-validations.json \
+  --db data/commerce.db
+```
+
+The JSON is an array (or `{ "validations": [...] }`) whose records contain
+`supplier_name`, `supplier_sku`, `marketplace_sale_price`,
+`platform_fee_estimate`, and `return_allowance`. The command applies the shared
+profit engine, records `PASS` or `REJECT` plus an audit row, and never approves
+or publishes a product.
+
+Move only market-validation `PASS` products into the human review queue:
+
+```bash
+python -m src.commerce.promote_market_pass_cli --db data/commerce.db
+```
+
+After review, explicitly approve one product by candidate ID or unique SKU and
+then create its local listing draft:
+
+```bash
+python -m src.commerce.approve_candidate_cli --sku PET-73110 \
+  --reviewer HUMAN_REVIEWER --db data/commerce.db
+python -m src.commerce.ebay_listing_draft_cli --sku PET-73110 \
+  --db data/commerce.db
+```
+
+Neither command publishes a listing.
+
 While eBay Developer API access is unavailable, create `manual-candidates.json`
 as a JSON array (or `{ "candidates": [...] }`) containing 5-10 manually
 researched eBay listings. Each listing uses these fields:

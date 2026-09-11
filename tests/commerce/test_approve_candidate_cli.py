@@ -67,3 +67,15 @@ def test_command_requires_explicit_candidate_id(tmp_path, capsys):
 
     assert exc_info.value.code == 2
     assert "--candidate-id" in capsys.readouterr().err
+
+
+def test_command_accepts_explicit_unique_sku_and_reviewer(tmp_path, capsys):
+    db_path = tmp_path / "commerce.db"
+    candidate = _save_candidate(db_path, CandidateStatus.REVIEW)
+
+    assert main([
+        "--sku", candidate.sku, "--reviewer", "human-bob", "--db", str(db_path)
+    ]) == 0
+    saved = CommerceDatabase(str(db_path)).get_candidate(candidate.candidate_id)
+    assert saved.status is CandidateStatus.APPROVED_FOR_LISTING
+    assert "Approved by human-bob" in saved.notes

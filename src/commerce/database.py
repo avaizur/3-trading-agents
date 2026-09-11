@@ -11,6 +11,8 @@ from src.commerce.schemas import (
     EBayListingDraft,
     Platform,
     ProductCandidate,
+    SupplierBackedProduct,
+    SupplierMarketValidationResult,
     SupplierCheckRecord,
     SupplierType,
 )
@@ -78,6 +80,61 @@ CREATE TABLE IF NOT EXISTS manual_supplier_matches (
 
 CREATE INDEX IF NOT EXISTS idx_manual_matches_item_id
 ON manual_supplier_matches(ebay_item_id);
+
+CREATE TABLE IF NOT EXISTS supplier_backed_products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_name TEXT NOT NULL,
+    supplier_sku TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    supplier_cost REAL NOT NULL CHECK (supplier_cost > 0),
+    lane TEXT NOT NULL CHECK (lane IN ('EVERGREEN', 'SEASONAL')),
+    market_price REAL,
+    platform_fees REAL,
+    return_allowance REAL,
+    market_price_validated INTEGER NOT NULL DEFAULT 0,
+    platform_fees_validated INTEGER NOT NULL DEFAULT 0,
+    return_allowance_validated INTEGER NOT NULL DEFAULT 0,
+    expected_profit REAL,
+    expected_margin REAL,
+    market_validation_status TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (market_validation_status IN ('PENDING', 'PASS', 'REJECT')),
+    validation_reason TEXT,
+    profitable INTEGER NOT NULL DEFAULT 0,
+    auto_approved INTEGER NOT NULL DEFAULT 0 CHECK (auto_approved = 0),
+    published INTEGER NOT NULL DEFAULT 0 CHECK (published = 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(supplier_name, supplier_sku),
+    CHECK (
+        profitable = 0 OR (
+            market_price_validated = 1 AND
+            platform_fees_validated = 1 AND
+            return_allowance_validated = 1
+        )
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_backed_lane
+ON supplier_backed_products(lane);
+
+CREATE TABLE IF NOT EXISTS supplier_market_validations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_name TEXT NOT NULL,
+    supplier_sku TEXT NOT NULL,
+    marketplace_sale_price REAL NOT NULL CHECK (marketplace_sale_price > 0),
+    platform_fee_estimate REAL NOT NULL CHECK (platform_fee_estimate >= 0),
+    return_allowance REAL NOT NULL CHECK (return_allowance >= 0),
+    expected_profit REAL NOT NULL,
+    expected_margin REAL NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('PASS', 'REJECT')),
+    reason TEXT NOT NULL,
+    validated_at TEXT NOT NULL,
+    FOREIGN KEY(supplier_name, supplier_sku)
+        REFERENCES supplier_backed_products(supplier_name, supplier_sku)
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_market_validations_product
+ON supplier_market_validations(supplier_name, supplier_sku);
 
 CREATE TABLE IF NOT EXISTS ebay_listing_drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,6 +218,22 @@ class CommerceDatabase:
                 )
             if "category" not in columns:
                 conn.execute("ALTER TABLE product_candidates ADD COLUMN category TEXT")
+            staged_columns = {
+                row[1] for row in conn.execute(
+                    "PRAGMA table_info(supplier_backed_products)"
+                )
+            }
+            staged_additions = {
+                "expected_profit": "REAL",
+                "expected_margin": "REAL",
+                "market_validation_status": "TEXT NOT NULL DEFAULT 'PENDING'",
+                "validation_reason": "TEXT",
+            }
+            for name, definition in staged_additions.items():
+                if name not in staged_columns:
+                    conn.execute(
+                        f"ALTER TABLE supplier_backed_products ADD COLUMN {name} {definition}"
+                    )
 
     def close(self) -> None:
         if self._shared_conn is not None:
@@ -268,6 +341,14 @@ class CommerceDatabase:
             cursor = conn.execute(query, tuple(params))
             rows = cursor.fetchall()
             return [ProductCandidate(**dict(r)) for r in rows]
+
+    def get_candidates_by_sku(self, sku: str) -> list[ProductCandidate]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM product_candidates WHERE sku = ? ORDER BY id ASC",
+                (sku,),
+            ).fetchall()
+            return [ProductCandidate(**dict(row)) for row in rows]
 
     def update_candidate_status(
         self,
@@ -418,6 +499,141 @@ class CommerceDatabase:
                 ),
             )
             return cursor.lastrowid
+
+    def import_supplier_backed_products(
+        self, products: list[SupplierBackedProduct]
+    ) -> list[SupplierBackedProduct]:
+        """Atomically upsert locked supplier facts without changing review state."""
+        if not products:
+            raise ValueError("Supplier product batch is empty.")
+        keys = [(p.supplier_name, p.supplier_sku) for p in products]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Supplier product batch contains duplicate SKUs.")
+        now = _now_iso()
+        with self.get_connection() as conn:
+            for product in products:
+                conn.execute(
+                    """
+                    INSERT INTO supplier_backed_products (
+                        supplier_name, supplier_sku, product_name, supplier_cost,
+                        lane, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(supplier_name, supplier_sku) DO UPDATE SET
+                        product_name=excluded.product_name,
+                        supplier_cost=excluded.supplier_cost,
+                        lane=excluded.lane,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        product.supplier_name, product.supplier_sku,
+                        product.product_name, product.supplier_cost,
+                        product.lane.value, now, now,
+                    ),
+                )
+        return [
+            self.get_supplier_backed_product(name, sku)
+            for name, sku in keys
+        ]
+
+    def get_supplier_backed_product(
+        self, supplier_name: str, supplier_sku: str
+    ) -> Optional[SupplierBackedProduct]:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM supplier_backed_products "
+                "WHERE supplier_name = ? AND supplier_sku = ?",
+                (supplier_name, supplier_sku),
+            ).fetchone()
+            return self._supplier_backed_from_row(row) if row else None
+
+    def list_supplier_backed_products(self) -> list[SupplierBackedProduct]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM supplier_backed_products ORDER BY id ASC"
+            ).fetchall()
+            return [self._supplier_backed_from_row(row) for row in rows]
+
+    def save_supplier_market_validations(
+        self, results: list[SupplierMarketValidationResult]
+    ) -> list[SupplierMarketValidationResult]:
+        """Atomically persist an audit record and current result for a batch."""
+        if not results:
+            raise ValueError("Market validation batch is empty.")
+        keys = [(r.supplier_name, r.supplier_sku) for r in results]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Market validation batch contains duplicate products.")
+        now = _now_iso()
+        saved: list[SupplierMarketValidationResult] = []
+        with self.get_connection() as conn:
+            for result in results:
+                existing = conn.execute(
+                    "SELECT 1 FROM supplier_backed_products "
+                    "WHERE supplier_name = ? AND supplier_sku = ?",
+                    (result.supplier_name, result.supplier_sku),
+                ).fetchone()
+                if not existing:
+                    raise KeyError(
+                        f"Staged product '{result.supplier_name}/{result.supplier_sku}' not found."
+                    )
+                cursor = conn.execute(
+                    """
+                    INSERT INTO supplier_market_validations (
+                        supplier_name, supplier_sku, marketplace_sale_price,
+                        platform_fee_estimate, return_allowance, expected_profit,
+                        expected_margin, status, reason, validated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.supplier_name, result.supplier_sku,
+                        result.marketplace_sale_price, result.platform_fee_estimate,
+                        result.return_allowance, result.expected_profit,
+                        result.expected_margin, result.status.value, result.reason, now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE supplier_backed_products SET
+                        market_price = ?, platform_fees = ?, return_allowance = ?,
+                        market_price_validated = 1, platform_fees_validated = 1,
+                        return_allowance_validated = 1, expected_profit = ?,
+                        expected_margin = ?, market_validation_status = ?,
+                        validation_reason = ?, profitable = ?, updated_at = ?
+                    WHERE supplier_name = ? AND supplier_sku = ?
+                    """,
+                    (
+                        result.marketplace_sale_price, result.platform_fee_estimate,
+                        result.return_allowance, result.expected_profit,
+                        result.expected_margin, result.status.value, result.reason,
+                        int(result.status.value == "PASS"), now,
+                        result.supplier_name, result.supplier_sku,
+                    ),
+                )
+                saved.append(result.model_copy(update={
+                    "id": cursor.lastrowid,
+                    "validated_at": datetime.fromisoformat(now),
+                }))
+        return saved
+
+    def get_supplier_market_validations(
+        self, supplier_name: str, supplier_sku: str
+    ) -> list[SupplierMarketValidationResult]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM supplier_market_validations "
+                "WHERE supplier_name = ? AND supplier_sku = ? ORDER BY id ASC",
+                (supplier_name, supplier_sku),
+            ).fetchall()
+            return [SupplierMarketValidationResult(**dict(row)) for row in rows]
+
+    @staticmethod
+    def _supplier_backed_from_row(row: sqlite3.Row) -> SupplierBackedProduct:
+        data = dict(row)
+        for field in (
+            "market_price_validated", "platform_fees_validated",
+            "return_allowance_validated", "profitable", "auto_approved", "published",
+        ):
+            data[field] = bool(data[field])
+        return SupplierBackedProduct(**data)
 
     def get_manual_supplier_matches(self, ebay_item_id: str) -> list[dict]:
         with self.get_connection() as conn:
