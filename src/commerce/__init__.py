@@ -15,6 +15,12 @@ from src.commerce.profit_engine import (
     calculate_profit,
     evaluate_profit_from_input,
 )
+from src.commerce.higher_ticket_scoring import (
+    HigherTicketDecision,
+    HigherTicketEconomics,
+    HigherTicketScore,
+    score_higher_ticket_ebay_product,
+)
 from src.commerce.listing_lifecycle import (
     FIRST_REVIEW_DAY,
     SECOND_REVIEW_END_DAY,
@@ -159,4 +165,8 @@ __all__ = [
     "run_seller_b",
     "run_critic",
     "create_ebay_draft",
+    "HigherTicketDecision",
+    "HigherTicketEconomics",
+    "HigherTicketScore",
+    "score_higher_ticket_ebay_product",
 ]
