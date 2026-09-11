@@ -14,6 +14,12 @@ from src.commerce.schemas import (
     SupplierBackedProduct,
     SupplierMarketValidationResult,
     SupplierCheckRecord,
+    SupplierPolicyRules,
+    EBayPolicySnapshot,
+    EBayFulfillmentPolicy,
+    EBayReturnPolicy,
+    EBayPaymentPolicy,
+    EBayInventoryLocation,
     SupplierType,
 )
 
@@ -165,6 +171,28 @@ CREATE TABLE IF NOT EXISTS ebay_listing_drafts (
 CREATE INDEX IF NOT EXISTS idx_drafts_candidate_id ON ebay_listing_drafts(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_drafts_sku ON ebay_listing_drafts(sku);
 CREATE INDEX IF NOT EXISTS idx_drafts_status ON ebay_listing_drafts(status);
+
+CREATE TABLE IF NOT EXISTS supplier_policy_rules (
+    supplier_id TEXT PRIMARY KEY,
+    dispatch_time_days INTEGER NOT NULL,
+    shipping_services TEXT NOT NULL,
+    remote_surcharge REAL NOT NULL,
+    blind_ship INTEGER NOT NULL,
+    return_route TEXT NOT NULL,
+    rma_required INTEGER NOT NULL,
+    return_postage TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ebay_policy_snapshots (
+    policy_type TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    marketplace_id TEXT NOT NULL,
+    settings TEXT NOT NULL,
+    discovered_at TEXT NOT NULL,
+    PRIMARY KEY (policy_type, policy_id)
+);
 """
 
 
@@ -239,6 +267,98 @@ class CommerceDatabase:
         if self._shared_conn is not None:
             self._shared_conn.close()
             self._shared_conn = None
+
+    def save_supplier_policy_rules(self, rules: SupplierPolicyRules) -> SupplierPolicyRules:
+        """Upsert supplier constraints; no marketplace operation is performed."""
+        now = _now_iso()
+        with self.get_connection() as conn:
+            conn.execute(
+                """INSERT INTO supplier_policy_rules (
+                    supplier_id, dispatch_time_days, shipping_services, remote_surcharge,
+                    blind_ship, return_route, rma_required, return_postage, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(supplier_id) DO UPDATE SET
+                    dispatch_time_days=excluded.dispatch_time_days,
+                    shipping_services=excluded.shipping_services,
+                    remote_surcharge=excluded.remote_surcharge,
+                    blind_ship=excluded.blind_ship,
+                    return_route=excluded.return_route,
+                    rma_required=excluded.rma_required,
+                    return_postage=excluded.return_postage,
+                    updated_at=excluded.updated_at""",
+                (rules.supplier_id, rules.dispatch_time_days,
+                 json.dumps(rules.shipping_services), rules.remote_surcharge,
+                 int(rules.blind_ship), rules.return_route.value, int(rules.rma_required),
+                 rules.return_postage.value, now),
+            )
+        loaded = self.get_supplier_policy_rules(rules.supplier_id)
+        assert loaded is not None
+        return loaded
+
+    def get_supplier_policy_rules(self, supplier_id: str) -> Optional[SupplierPolicyRules]:
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM supplier_policy_rules WHERE supplier_id = ?",
+                               (supplier_id,)).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["shipping_services"] = json.loads(data["shipping_services"])
+        data["blind_ship"] = bool(data["blind_ship"])
+        data["rma_required"] = bool(data["rma_required"])
+        return SupplierPolicyRules(**data)
+
+    # Short aliases retained for callers that treat these as supplier rules.
+    save_supplier_rules = save_supplier_policy_rules
+    get_supplier_rules = get_supplier_policy_rules
+
+    def save_ebay_policy_snapshot(self, snapshot: EBayPolicySnapshot) -> None:
+        """Persist only normalized matching fields, replacing the prior cache."""
+        now = _now_iso()
+        groups = (
+            ("fulfillment", snapshot.fulfillment_policies),
+            ("return", snapshot.return_policies),
+            ("payment", snapshot.payment_policies),
+            ("location", snapshot.inventory_locations),
+        )
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM ebay_policy_snapshots WHERE marketplace_id = ?",
+                         (snapshot.marketplace_id,))
+            for kind, records in groups:
+                for record in records:
+                    data = record.model_dump(mode="json")
+                    policy_id = data.pop("policy_id", None)
+                    if policy_id is None:
+                        policy_id = data.pop("merchant_location_key")
+                    name = data.pop("name")
+                    marketplace = data.pop("marketplace_id", snapshot.marketplace_id)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO ebay_policy_snapshots "
+                        "(policy_type, policy_id, name, marketplace_id, settings, discovered_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (kind, policy_id, name, marketplace, json.dumps(data), now),
+                    )
+
+    def get_ebay_policy_snapshot(self, marketplace_id: str) -> EBayPolicySnapshot:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ebay_policy_snapshots WHERE marketplace_id = ? ORDER BY policy_type, policy_id",
+                (marketplace_id,),
+            ).fetchall()
+        groups = {"fulfillment": [], "return": [], "payment": [], "location": []}
+        models = {"fulfillment": EBayFulfillmentPolicy, "return": EBayReturnPolicy,
+                  "payment": EBayPaymentPolicy, "location": EBayInventoryLocation}
+        for row in rows:
+            data = json.loads(row["settings"])
+            id_name = "merchant_location_key" if row["policy_type"] == "location" else "policy_id"
+            data.update({id_name: row["policy_id"], "name": row["name"]})
+            if row["policy_type"] != "location":
+                data["marketplace_id"] = row["marketplace_id"]
+            groups[row["policy_type"]].append(models[row["policy_type"]](**data))
+        return EBayPolicySnapshot(
+            marketplace_id=marketplace_id, fulfillment_policies=groups["fulfillment"],
+            return_policies=groups["return"], payment_policies=groups["payment"],
+            inventory_locations=groups["location"],
+        )
 
     def save_candidate(self, candidate: ProductCandidate) -> ProductCandidate:
         now = _now_iso()

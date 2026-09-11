@@ -8,6 +8,19 @@ Run tests:
 python -m pytest -q
 ```
 
+Discover existing eBay seller policies and inventory locations, cache only the
+normalized fields needed for matching, and compare them with persisted supplier
+policy rules:
+
+```bash
+python -m src.commerce.ebay_policy_cli SUPPLIER-ID --db data/commerce.db
+```
+
+This command makes GET requests only. It prints `MATCHED` with the selected
+fulfillment, return, payment, and inventory-location IDs, or `MISMATCH` with a
+reason. It never creates or updates eBay policies, listings, or trading state,
+and credentials and authorization headers are never written or printed.
+
 Import the locked Go Dropship supplier batch into the commerce database:
 
 ```bash

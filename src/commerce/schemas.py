@@ -67,6 +67,21 @@ class SupplierVerificationStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+class PolicyCompatibilityStatus(str, Enum):
+    MATCHED = "MATCHED"
+    MISMATCH = "MISMATCH"
+
+
+class ReturnRoute(str, Enum):
+    SUPPLIER = "SUPPLIER"
+    SELLER = "SELLER"
+
+
+class ReturnPostagePayer(str, Enum):
+    BUYER = "BUYER"
+    SELLER = "SELLER"
+
+
 class SupplierProfitStatus(str, Enum):
     VERIFIED_PROFITABLE = "VERIFIED_PROFITABLE"
     VERIFIED_LOW_MARGIN = "VERIFIED_LOW_MARGIN"
@@ -184,6 +199,68 @@ class SupplierProduct(BaseModel):
     allows_reselling: bool = True
     supplier_name: Optional[str] = None
     supplier_url: Optional[str] = None
+
+
+class SupplierPolicyRules(BaseModel):
+    """Persisted operational constraints used for marketplace-policy matching."""
+
+    supplier_id: str = Field(min_length=1)
+    dispatch_time_days: int = Field(ge=0)
+    shipping_services: list[str] = Field(min_length=1)
+    remote_surcharge: float = Field(default=0.0, ge=0)
+    blind_ship: bool
+    return_route: ReturnRoute
+    rma_required: bool
+    return_postage: ReturnPostagePayer
+    updated_at: Optional[datetime] = None
+
+
+class EBayFulfillmentPolicy(BaseModel):
+    policy_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    marketplace_id: str
+    handling_time_days: int
+    shipping_services: list[str] = Field(default_factory=list)
+    excluded_regions: list[str] = Field(default_factory=list)
+
+
+class EBayReturnPolicy(BaseModel):
+    policy_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    marketplace_id: str
+    returns_accepted: bool
+    return_period_days: Optional[int] = None
+    return_shipping_cost_payer: Optional[ReturnPostagePayer] = None
+
+
+class EBayPaymentPolicy(BaseModel):
+    policy_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    marketplace_id: str
+
+
+class EBayInventoryLocation(BaseModel):
+    merchant_location_key: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    location_types: list[str] = Field(default_factory=list)
+    status: str
+
+
+class EBayPolicySnapshot(BaseModel):
+    marketplace_id: str
+    fulfillment_policies: list[EBayFulfillmentPolicy]
+    return_policies: list[EBayReturnPolicy]
+    payment_policies: list[EBayPaymentPolicy]
+    inventory_locations: list[EBayInventoryLocation]
+
+
+class PolicyCompatibilityResult(BaseModel):
+    status: PolicyCompatibilityStatus
+    reason: str
+    fulfillment_policy_id: Optional[str] = None
+    return_policy_id: Optional[str] = None
+    payment_policy_id: Optional[str] = None
+    inventory_location_key: Optional[str] = None
 
 
 class SupplierValidationResult(BaseModel):
