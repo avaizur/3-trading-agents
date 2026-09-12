@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 from urllib.request import Request, urlopen
 
 
@@ -83,7 +83,7 @@ def exchange_authorization_code(
     }
     body = urlencode({
         "grant_type": "authorization_code",
-        "code": authorization_code,
+        "code": unquote(authorization_code),
         "redirect_uri": RUNAME,
     }).encode("ascii")
     payload = (transport or _post_token)(TOKEN_URL, body, headers, timeout)

@@ -92,3 +92,17 @@ def test_exchange_cli_never_echoes_secret_material(monkeypatch, tmp_path, capsys
     console = captured.out + captured.err
     assert not any(value in console for value in secrets)
     assert json.loads(ebay_oauth.default_token_path().read_text())["access_token"] == secrets[2]
+
+def test_exchange_decodes_url_encoded_authorization_code_before_posting():
+    calls = []
+
+    def transport(url, body, headers, timeout):
+        calls.append(body)
+        return {"access_token": "access-value"}
+
+    ebay_oauth.exchange_authorization_code(
+        "abc%3D4", "client-value", "secret-value", transport=transport
+    )
+
+    assert parse_qs(calls[0].decode("ascii"))["code"] == ["abc=4"]
+
