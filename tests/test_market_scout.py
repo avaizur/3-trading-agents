@@ -69,3 +69,18 @@ def test_market_scout_preserves_timestamp():
     observation = observe_market(snapshot)
 
     assert observation.timestamp == snapshot.timestamp
+
+
+def test_market_scout_preserves_missing_volume():
+    snapshot = MarketSnapshot(
+        symbol="TEST",
+        price=100,
+        volume=None,
+        timestamp=datetime.now(timezone.utc),
+        source="test-source",
+    )
+
+    observation = observe_market(snapshot)
+
+    assert observation.valid is True
+    assert observation.volume is None
