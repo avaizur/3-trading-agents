@@ -21,3 +21,20 @@ def test_market_scout_accepts_valid_snapshot():
     assert observation.price == 100
     assert observation.volume == 1000
     assert observation.source == "test-source"
+
+
+def test_market_scout_rejects_stale_snapshot():
+    from datetime import timedelta
+
+    snapshot = MarketSnapshot(
+        symbol="TEST",
+        price=100,
+        volume=1000,
+        timestamp=datetime.now(timezone.utc) - timedelta(hours=2),
+        source="test-source",
+    )
+
+    observation = observe_market(snapshot)
+
+    assert observation.valid is False
+    assert observation.reason == "market data is stale"
