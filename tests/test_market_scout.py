@@ -55,3 +55,17 @@ def test_market_scout_rejects_future_snapshot():
 
     assert observation.valid is False
     assert observation.reason == "market data timestamp is in the future"
+
+
+def test_market_scout_preserves_timestamp():
+    snapshot = MarketSnapshot(
+        symbol="TEST",
+        price=100,
+        volume=1000,
+        timestamp=datetime.now(timezone.utc),
+        source="test-source",
+    )
+
+    observation = observe_market(snapshot)
+
+    assert observation.timestamp == snapshot.timestamp

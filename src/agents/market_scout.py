@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 from src.models.schemas import MarketSnapshot
@@ -11,6 +13,7 @@ class MarketObservation(BaseModel):
     price: float
     volume: float | None
     source: str
+    timestamp: datetime
 
 
 def observe_market(snapshot: MarketSnapshot) -> MarketObservation:
@@ -23,6 +26,7 @@ def observe_market(snapshot: MarketSnapshot) -> MarketObservation:
         price=snapshot.price,
         volume=snapshot.volume,
         source=snapshot.source,
+        timestamp=snapshot.timestamp,
     )
 
 
