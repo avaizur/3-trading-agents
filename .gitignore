@@ -4,3 +4,11 @@ __pycache__/
 .env
 data/*.db
 .pytest_cache/
+
+# Terraform local files
+**/.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan
+crash.log
