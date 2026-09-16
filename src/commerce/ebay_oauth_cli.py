@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
             "Tokens are stored in a private mode-0600 user config file."
         ),
     )
-    parser.add_argument("command", choices=("authorize", "exchange"))
+    parser.add_argument("command", choices=("authorize", "exchange", "refresh"))
     args = parser.parse_args(argv)
 
     try:
@@ -41,6 +41,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         client_secret = _required_env("EBAY_CLIENT_SECRET")
+
+        if args.command == "refresh":
+            from src.commerce.ebay_oauth import refresh_saved_access_token
+
+            destination = refresh_saved_access_token(client_id, client_secret)
+            print(f"eBay Production access token refreshed securely at {destination}")
+            return 0
+
         code = os.environ.get("EBAY_AUTHORIZATION_CODE") or getpass.getpass(
             "Paste the eBay authorization code (input hidden): "
         )

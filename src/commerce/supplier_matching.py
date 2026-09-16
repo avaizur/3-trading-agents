@@ -1,3 +1,4 @@
+import re
 from typing import Optional, Protocol
 
 from pydantic import BaseModel, Field
@@ -9,6 +10,7 @@ from src.commerce.schemas import (
     Platform,
     ProductCandidate,
     ProfitDecision,
+    SupplierBackedProduct,
     SupplierProduct,
     SupplierProfitStatus,
     SupplierType,
@@ -16,6 +18,70 @@ from src.commerce.schemas import (
     SupplierVerificationStatus,
 )
 from src.commerce.supplier_validator import validate_supplier
+
+
+class SupplierCatalogMatch(BaseModel):
+    supplier_name: str
+    supplier_sku: str
+    product_name: str
+    shared_terms: list[str]
+    match_score: float = Field(ge=0.0, le=1.0)
+
+
+_MATCH_STOPWORDS = {
+    "and", "for", "with", "the", "new", "home", "uk", "large",
+    "pack", "pcs", "piece", "pieces", "set", "decor", "decoration",
+    "decorations", "party",
+}
+
+
+def _match_terms(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", value.casefold())
+        if len(token) >= 3 and token not in _MATCH_STOPWORDS
+    }
+
+
+def match_supplier_catalog(
+    opportunity: ScoredMarketOpportunity,
+    products: list[SupplierBackedProduct],
+    *,
+    min_shared_terms: int = 2,
+    min_score: float = 0.50,
+) -> list[SupplierCatalogMatch]:
+    """
+    Conservatively match a live marketplace opportunity against staged supplier
+    products. Generic retail words are ignored to reduce false positives.
+    """
+    market_terms = _match_terms(opportunity.listing.title)
+    matches: list[SupplierCatalogMatch] = []
+
+    for product in products:
+        supplier_terms = _match_terms(product.product_name)
+        if not supplier_terms:
+            continue
+
+        shared = market_terms & supplier_terms
+        score = len(shared) / len(supplier_terms)
+
+        if len(shared) < min_shared_terms or score < min_score:
+            continue
+
+        matches.append(
+            SupplierCatalogMatch(
+                supplier_name=product.supplier_name,
+                supplier_sku=product.supplier_sku,
+                product_name=product.product_name,
+                shared_terms=sorted(shared),
+                match_score=round(score, 4),
+            )
+        )
+
+    return sorted(
+        matches,
+        key=lambda item: (-item.match_score, item.supplier_sku),
+    )
 
 
 class ManualSupplierInput(BaseModel):

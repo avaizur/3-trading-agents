@@ -1,6 +1,12 @@
 from datetime import date
 from typing import Any, Optional
 
+from src.commerce.market_research import MarketResearchService
+from src.commerce.opportunity_scoring import (
+    MarketOpportunityScorer,
+    ScoredMarketOpportunity,
+    shortlist_candidates,
+)
 from src.commerce.schemas import (
     ProductCandidate,
     ProductLane,
@@ -27,6 +33,31 @@ class ProductScoutAgent:
 
     def __init__(self, db=None):
         self.db = db
+
+    def research_market(
+        self,
+        adapter,
+        *,
+        as_of: Optional[date] = None,
+        limit_per_search: int = 20,
+        top_n: int = 10,
+    ) -> list[ScoredMarketOpportunity]:
+        """
+        Research the current actionable market focus using a read-only marketplace
+        adapter, score opportunities deterministically, and return the best results.
+        """
+        focus = get_current_search_focus(as_of)
+        if focus is None:
+            return []
+
+        service = MarketResearchService(adapter)
+        listings = service.find_candidates(
+            focus,
+            limit_per_search=limit_per_search,
+        )
+
+        scored = MarketOpportunityScorer().score_candidates(listings, focus)
+        return shortlist_candidates(scored, top_n)
 
     def evaluate(
         self,

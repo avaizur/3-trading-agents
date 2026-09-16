@@ -88,10 +88,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print_run_result(result)
         else:
+            products = db.list_supplier_backed_products()
+            skipped = [
+                product
+                for product in products
+                if not pipeline.market_evidence_ready(product)
+            ]
+
             results = pipeline.run_staged_batch(as_of=args.as_of)
+
             for res in results:
                 print_run_result(res)
-            print(f"\nBatch completed: {len(results)} staged product(s) evaluated through 3-agent pipeline.")
+
+            for product in skipped:
+                print(
+                    f"SKIPPED: {product.supplier_sku} - MARKET EVIDENCE REQUIRED "
+                    f"(no usable validated market price)."
+                )
+
+            print(f"\nBatch completed: {len(results)} product(s) evaluated; {len(skipped)} skipped.")
             print("Zero listings auto-approved. Zero listings published. Human approval is mandatory.")
     except Exception as exc:
         print(f"Error running pipeline: {exc}", file=sys.stderr)

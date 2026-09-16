@@ -24,7 +24,7 @@ TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 RUNAME = "Avais_Ahmad-AvaisAhm-Xorwia-idfjw"
 SCOPES = (
     "https://api.ebay.com/oauth/api_scope",
-    "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+    "https://api.ebay.com/oauth/api_scope/sell.inventory",
     "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
 )
 
@@ -132,4 +132,118 @@ def store_tokens_securely(token_payload: Mapping[str, Any], path: Path | None = 
     finally:
         if temporary_name and os.path.exists(temporary_name):
             os.unlink(temporary_name)
+    return destination
+
+
+def load_saved_tokens(path: Path | None = None) -> dict[str, Any]:
+    """Load the private OAuth token file without logging token values."""
+    source = (path or default_token_path()).expanduser()
+    if not source.exists():
+        raise OAuthError(f"Saved eBay OAuth token file not found: {source}")
+
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OAuthError("Unable to read saved eBay OAuth tokens") from exc
+
+    if not isinstance(payload, dict):
+        raise OAuthError("Saved eBay OAuth token file is invalid")
+
+    return payload
+
+
+def refresh_access_token(
+    refresh_token: str,
+    client_id: str,
+    client_secret: str,
+    *,
+    scope: str | None = None,
+    transport: TokenTransport | None = None,
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    """Mint a new User access token from an existing refresh token."""
+    if not refresh_token or not client_id or not client_secret:
+        raise ValueError("Refresh token, Client ID, and Client Secret are required")
+
+    credentials = base64.b64encode(
+        f"{client_id}:{client_secret}".encode("utf-8")
+    ).decode("ascii")
+
+    headers = {
+        "Authorization": f"Basic {credentials}",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+    }
+
+    fields = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+
+    # Scope is optional for eBay refresh. If present in the saved
+    # consent token, preserve that same scope set.
+    if scope:
+        fields["scope"] = scope
+
+    body = urlencode(fields).encode("ascii")
+
+    payload = (transport or _post_token)(
+        TOKEN_URL,
+        body,
+        headers,
+        timeout,
+    )
+
+    if not isinstance(payload.get("access_token"), str):
+        raise OAuthError("eBay token refresh did not return an access token")
+
+    return dict(payload)
+
+
+def refresh_saved_access_token(
+    client_id: str,
+    client_secret: str,
+    *,
+    path: Path | None = None,
+    transport: TokenTransport | None = None,
+    timeout: float = 15.0,
+) -> Path:
+    """
+    Refresh the saved eBay User access token while preserving the
+    long-lived refresh token if eBay does not return a replacement.
+    """
+    destination = (path or default_token_path()).expanduser()
+    saved = load_saved_tokens(destination)
+
+    refresh_token = saved.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise OAuthError("Saved eBay OAuth data does not contain a refresh token")
+
+    scope = saved.get("scope")
+    if not isinstance(scope, str):
+        scope = None
+
+    refreshed = refresh_access_token(
+        refresh_token,
+        client_id,
+        client_secret,
+        scope=scope,
+        transport=transport,
+        timeout=timeout,
+    )
+
+    merged = dict(saved)
+
+    for key, value in refreshed.items():
+        # A refresh normally returns a new access token, not a new
+        # refresh token. Never overwrite a good refresh token with N/A.
+        if key == "refresh_token" and (
+            not isinstance(value, str)
+            or not value.strip()
+            or value.strip().upper() == "N/A"
+        ):
+            continue
+        merged[key] = value
+
+    store_tokens_securely(merged, destination)
     return destination

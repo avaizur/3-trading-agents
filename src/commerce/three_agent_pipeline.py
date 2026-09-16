@@ -353,15 +353,24 @@ class ThreeAgentPipeline:
             persist_history=persist_history,
         )
 
+    @staticmethod
+    def market_evidence_ready(product: SupplierBackedProduct) -> bool:
+        """Return True only when a staged product has a usable validated market price."""
+        return product.market_price is not None and product.market_price > 0
+
     def run_staged_batch(
         self,
         as_of: Optional[date] = None,
         persist_history: bool = True,
     ) -> list[PipelineRunResult]:
-        """Run pipeline over all staged supplier products in database."""
+        """Run pipeline over staged products that have usable market evidence."""
         products = self.db.list_supplier_backed_products()
         results: list[PipelineRunResult] = []
+
         for product in products:
+            if not self.market_evidence_ready(product):
+                continue
+
             results.append(
                 self.run(
                     product=product,
@@ -372,4 +381,5 @@ class ThreeAgentPipeline:
                     persist_history=persist_history,
                 )
             )
+
         return results
