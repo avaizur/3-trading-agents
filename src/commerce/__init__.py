@@ -45,6 +45,7 @@ from src.commerce.queue import (
     ProductCandidateQueue,
     ProductQueue,
 )
+from src.commerce.three_agent_pipeline import ThreeAgentPipeline
 from src.commerce.schemas import (
     CandidateStatus,
     CommerceCriticRecommendation,
@@ -175,6 +176,7 @@ __all__ = [
     "run_seller_b",
     "run_critic",
     "create_ebay_draft",
+    "ThreeAgentPipeline",
     "HigherTicketDecision",
     "HigherTicketEconomics",
     "HigherTicketScore",

@@ -21,6 +21,11 @@ from src.commerce.schemas import (
     EBayPaymentPolicy,
     EBayInventoryLocation,
     SupplierType,
+    AgentEvaluationRecord,
+    HumanDecisionRecord,
+    RealizedOutcomeRecord,
+    AgentRole,
+    HumanDecisionType,
 )
 
 COMMERCE_SCHEMA = """
@@ -181,6 +186,7 @@ CREATE TABLE IF NOT EXISTS supplier_policy_rules (
     return_route TEXT NOT NULL,
     rma_required INTEGER NOT NULL,
     return_postage TEXT NOT NULL,
+    supplier_fault_resolution TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -193,6 +199,63 @@ CREATE TABLE IF NOT EXISTS ebay_policy_snapshots (
     discovered_at TEXT NOT NULL,
     PRIMARY KEY (policy_type, policy_id)
 );
+
+CREATE TABLE IF NOT EXISTS agent_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_run_id TEXT NOT NULL,
+    supplier_sku TEXT NOT NULL,
+    supplier_name TEXT NOT NULL,
+    agent_role TEXT NOT NULL,
+    recommendation TEXT NOT NULL,
+    score REAL,
+    confidence REAL,
+    evidence_snapshot TEXT NOT NULL DEFAULT '{}',
+    evaluation_details TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_evals_sku ON agent_evaluations(supplier_sku);
+CREATE INDEX IF NOT EXISTS idx_agent_evals_run ON agent_evaluations(pipeline_run_id);
+
+CREATE TABLE IF NOT EXISTS human_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id TEXT NOT NULL,
+    supplier_sku TEXT NOT NULL,
+    pipeline_run_id TEXT,
+    decision TEXT NOT NULL,
+    reviewer_id TEXT NOT NULL,
+    reason_category TEXT NOT NULL,
+    notes TEXT,
+    price_adjustment REAL,
+    decided_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_human_decisions_sku ON human_decisions(supplier_sku);
+CREATE INDEX IF NOT EXISTS idx_human_decisions_cand ON human_decisions(candidate_id);
+
+CREATE TABLE IF NOT EXISTS commerce_realized_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_sku TEXT NOT NULL,
+    supplier_name TEXT NOT NULL,
+    listing_id TEXT,
+    listed_at TEXT,
+    first_sale_at TEXT,
+    days_to_first_sale INTEGER,
+    units_sold INTEGER NOT NULL DEFAULT 0,
+    actual_sale_price REAL,
+    actual_supplier_cost REAL,
+    actual_platform_fees REAL,
+    realized_net_profit REAL,
+    realized_margin_pct REAL,
+    return_count INTEGER NOT NULL DEFAULT 0,
+    return_reasons TEXT NOT NULL DEFAULT '[]',
+    supplier_fulfillment_issue TEXT,
+    seasonal_window_missed INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    UNIQUE(supplier_name, supplier_sku)
+);
+
+CREATE INDEX IF NOT EXISTS idx_outcomes_sku ON commerce_realized_outcomes(supplier_sku);
 """
 
 
@@ -263,6 +326,17 @@ class CommerceDatabase:
                         f"ALTER TABLE supplier_backed_products ADD COLUMN {name} {definition}"
                     )
 
+            supplier_policy_columns = {
+                row[1] for row in conn.execute(
+                    "PRAGMA table_info(supplier_policy_rules)"
+                )
+            }
+            if "supplier_fault_resolution" not in supplier_policy_columns:
+                conn.execute(
+                    "ALTER TABLE supplier_policy_rules "
+                    "ADD COLUMN supplier_fault_resolution TEXT"
+                )
+
     def close(self) -> None:
         if self._shared_conn is not None:
             self._shared_conn.close()
@@ -275,8 +349,9 @@ class CommerceDatabase:
             conn.execute(
                 """INSERT INTO supplier_policy_rules (
                     supplier_id, dispatch_time_days, shipping_services, remote_surcharge,
-                    blind_ship, return_route, rma_required, return_postage, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    blind_ship, return_route, rma_required, return_postage,
+                    supplier_fault_resolution, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(supplier_id) DO UPDATE SET
                     dispatch_time_days=excluded.dispatch_time_days,
                     shipping_services=excluded.shipping_services,
@@ -285,11 +360,20 @@ class CommerceDatabase:
                     return_route=excluded.return_route,
                     rma_required=excluded.rma_required,
                     return_postage=excluded.return_postage,
+                    supplier_fault_resolution=excluded.supplier_fault_resolution,
                     updated_at=excluded.updated_at""",
-                (rules.supplier_id, rules.dispatch_time_days,
-                 json.dumps(rules.shipping_services), rules.remote_surcharge,
-                 int(rules.blind_ship), rules.return_route.value, int(rules.rma_required),
-                 rules.return_postage.value, now),
+                (
+                    rules.supplier_id,
+                    rules.dispatch_time_days,
+                    json.dumps(rules.shipping_services),
+                    rules.remote_surcharge,
+                    int(rules.blind_ship),
+                    rules.return_route.value,
+                    int(rules.rma_required),
+                    rules.return_postage.value,
+                    rules.supplier_fault_resolution,
+                    now,
+                ),
             )
         loaded = self.get_supplier_policy_rules(rules.supplier_id)
         assert loaded is not None
@@ -941,6 +1025,236 @@ class CommerceDatabase:
         if not updated:
             raise KeyError(f"Draft '{draft_id}' not found after update.")
         return updated
+
+    def save_agent_evaluation(
+        self, evaluation: AgentEvaluationRecord
+    ) -> AgentEvaluationRecord:
+        now = _now_iso()
+        created_at = (
+            evaluation.created_at.isoformat()
+            if evaluation.created_at
+            else now
+        )
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO agent_evaluations (
+                    pipeline_run_id, supplier_sku, supplier_name, agent_role,
+                    recommendation, score, confidence, evidence_snapshot,
+                    evaluation_details, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation.pipeline_run_id,
+                    evaluation.supplier_sku,
+                    evaluation.supplier_name,
+                    evaluation.agent_role.value if hasattr(evaluation.agent_role, "value") else str(evaluation.agent_role),
+                    evaluation.recommendation,
+                    evaluation.score,
+                    evaluation.confidence,
+                    json.dumps(evaluation.evidence_snapshot),
+                    json.dumps(evaluation.evaluation_details),
+                    created_at,
+                ),
+            )
+            saved_id = cursor.lastrowid
+        copy_eval = evaluation.model_copy()
+        copy_eval.id = saved_id
+        if copy_eval.created_at is None:
+            copy_eval.created_at = datetime.fromisoformat(created_at)
+        return copy_eval
+
+    def list_agent_evaluations(
+        self,
+        supplier_sku: Optional[str] = None,
+        pipeline_run_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[AgentEvaluationRecord]:
+        query = "SELECT * FROM agent_evaluations"
+        conditions = []
+        params = []
+        if supplier_sku is not None:
+            conditions.append("supplier_sku = ?")
+            params.append(supplier_sku)
+        if pipeline_run_id is not None:
+            conditions.append("pipeline_run_id = ?")
+            params.append(pipeline_run_id)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id ASC LIMIT ?"
+        params.append(limit)
+
+        with self.get_connection() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+            results = []
+            for row in rows:
+                data = dict(row)
+                data["evidence_snapshot"] = json.loads(data["evidence_snapshot"])
+                data["evaluation_details"] = json.loads(data["evaluation_details"])
+                results.append(AgentEvaluationRecord(**data))
+            return results
+
+    def record_human_decision(
+        self, decision: HumanDecisionRecord
+    ) -> HumanDecisionRecord:
+        now = _now_iso()
+        decided_at = (
+            decision.decided_at.isoformat()
+            if decision.decided_at
+            else now
+        )
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO human_decisions (
+                    candidate_id, supplier_sku, pipeline_run_id, decision,
+                    reviewer_id, reason_category, notes, price_adjustment, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision.candidate_id,
+                    decision.supplier_sku,
+                    decision.pipeline_run_id,
+                    decision.decision.value if hasattr(decision.decision, "value") else str(decision.decision),
+                    decision.reviewer_id,
+                    decision.reason_category,
+                    decision.notes,
+                    decision.price_adjustment,
+                    decided_at,
+                ),
+            )
+            saved_id = cursor.lastrowid
+        copy_decision = decision.model_copy()
+        copy_decision.id = saved_id
+        if copy_decision.decided_at is None:
+            copy_decision.decided_at = datetime.fromisoformat(decided_at)
+        return copy_decision
+
+    def list_human_decisions(
+        self,
+        supplier_sku: Optional[str] = None,
+        candidate_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[HumanDecisionRecord]:
+        query = "SELECT * FROM human_decisions"
+        conditions = []
+        params = []
+        if supplier_sku is not None:
+            conditions.append("supplier_sku = ?")
+            params.append(supplier_sku)
+        if candidate_id is not None:
+            conditions.append("candidate_id = ?")
+            params.append(candidate_id)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id ASC LIMIT ?"
+        params.append(limit)
+
+        with self.get_connection() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+            return [HumanDecisionRecord(**dict(row)) for row in rows]
+
+    def save_realized_outcome(
+        self, outcome: RealizedOutcomeRecord
+    ) -> RealizedOutcomeRecord:
+        now = _now_iso()
+        updated_at = (
+            outcome.updated_at.isoformat()
+            if outcome.updated_at
+            else now
+        )
+        listed_at = outcome.listed_at.isoformat() if outcome.listed_at else None
+        first_sale_at = outcome.first_sale_at.isoformat() if outcome.first_sale_at else None
+
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO commerce_realized_outcomes (
+                    supplier_sku, supplier_name, listing_id, listed_at,
+                    first_sale_at, days_to_first_sale, units_sold, actual_sale_price,
+                    actual_supplier_cost, actual_platform_fees, realized_net_profit,
+                    realized_margin_pct, return_count, return_reasons,
+                    supplier_fulfillment_issue, seasonal_window_missed, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(supplier_name, supplier_sku) DO UPDATE SET
+                    listing_id=COALESCE(excluded.listing_id, listing_id),
+                    listed_at=COALESCE(excluded.listed_at, listed_at),
+                    first_sale_at=COALESCE(excluded.first_sale_at, first_sale_at),
+                    days_to_first_sale=COALESCE(excluded.days_to_first_sale, days_to_first_sale),
+                    units_sold=excluded.units_sold,
+                    actual_sale_price=COALESCE(excluded.actual_sale_price, actual_sale_price),
+                    actual_supplier_cost=COALESCE(excluded.actual_supplier_cost, actual_supplier_cost),
+                    actual_platform_fees=COALESCE(excluded.actual_platform_fees, actual_platform_fees),
+                    realized_net_profit=COALESCE(excluded.realized_net_profit, realized_net_profit),
+                    realized_margin_pct=COALESCE(excluded.realized_margin_pct, realized_margin_pct),
+                    return_count=excluded.return_count,
+                    return_reasons=excluded.return_reasons,
+                    supplier_fulfillment_issue=COALESCE(excluded.supplier_fulfillment_issue, supplier_fulfillment_issue),
+                    seasonal_window_missed=excluded.seasonal_window_missed,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    outcome.supplier_sku,
+                    outcome.supplier_name,
+                    outcome.listing_id,
+                    listed_at,
+                    first_sale_at,
+                    outcome.days_to_first_sale,
+                    outcome.units_sold,
+                    outcome.actual_sale_price,
+                    outcome.actual_supplier_cost,
+                    outcome.actual_platform_fees,
+                    outcome.realized_net_profit,
+                    outcome.realized_margin_pct,
+                    outcome.return_count,
+                    json.dumps(outcome.return_reasons),
+                    outcome.supplier_fulfillment_issue,
+                    1 if outcome.seasonal_window_missed else 0,
+                    updated_at,
+                ),
+            )
+            saved_id = cursor.lastrowid
+        loaded = self.get_realized_outcome(outcome.supplier_sku, outcome.supplier_name)
+        if loaded is not None:
+            return loaded
+        copy_outcome = outcome.model_copy()
+        copy_outcome.id = saved_id
+        return copy_outcome
+
+    def get_realized_outcome(
+        self, supplier_sku: str, supplier_name: str
+    ) -> Optional[RealizedOutcomeRecord]:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM commerce_realized_outcomes WHERE supplier_sku = ? AND supplier_name = ?",
+                (supplier_sku, supplier_name),
+            ).fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            data["return_reasons"] = json.loads(data["return_reasons"])
+            data["seasonal_window_missed"] = bool(data["seasonal_window_missed"])
+            return RealizedOutcomeRecord(**data)
+
+    def list_realized_outcomes(
+        self, supplier_sku: Optional[str] = None
+    ) -> list[RealizedOutcomeRecord]:
+        query = "SELECT * FROM commerce_realized_outcomes"
+        params = []
+        if supplier_sku is not None:
+            query += " WHERE supplier_sku = ?"
+            params.append(supplier_sku)
+        query += " ORDER BY id ASC"
+
+        with self.get_connection() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+            results = []
+            for row in rows:
+                data = dict(row)
+                data["return_reasons"] = json.loads(data["return_reasons"])
+                data["seasonal_window_missed"] = bool(data["seasonal_window_missed"])
+                results.append(RealizedOutcomeRecord(**data))
+            return results
 
 
 def init_commerce_database(path: str = "data/commerce.db") -> None:

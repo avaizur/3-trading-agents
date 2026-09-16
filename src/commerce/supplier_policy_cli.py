@@ -37,6 +37,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=[item.value for item in ReturnPostagePayer],
         required=True,
     )
+    parser.add_argument(
+        "--supplier-fault-resolution",
+        default=None,
+        help="Supplier process for damaged, defective, wrong, or lost items.",
+    )
     parser.add_argument("--db", default="data/commerce.db")
     args = parser.parse_args(argv)
 
@@ -49,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         return_route=ReturnRoute(args.return_route),
         rma_required=args.rma_required,
         return_postage=ReturnPostagePayer(args.return_postage),
+        supplier_fault_resolution=args.supplier_fault_resolution,
     )
 
     CommerceDatabase(args.db).save_supplier_policy_rules(rules)

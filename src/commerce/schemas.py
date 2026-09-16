@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -212,6 +212,7 @@ class SupplierPolicyRules(BaseModel):
     return_route: ReturnRoute
     rma_required: bool
     return_postage: ReturnPostagePayer
+    supplier_fault_resolution: Optional[str] = None
     updated_at: Optional[datetime] = None
 
 
@@ -623,3 +624,129 @@ class EBayListingDraft(BaseModel):
 
 
 ListingDraft = EBayListingDraft
+
+
+class AgentRole(str, Enum):
+    SCOUT = "SCOUT"
+    COMMERCIAL = "COMMERCIAL"
+    CRITIC = "CRITIC"
+
+
+class PipelineGateStatus(str, Enum):
+    READY_FOR_HUMAN_REVIEW = "READY_FOR_HUMAN_REVIEW"
+    REVIEW = "REVIEW"
+    REJECT = "REJECT"
+
+
+class HumanDecisionType(str, Enum):
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    PRICE_ADJUSTED = "PRICE_ADJUSTED"
+
+
+class AgentEvaluationRecord(BaseModel):
+    id: Optional[int] = None
+    pipeline_run_id: str = Field(min_length=1)
+    supplier_sku: str = Field(min_length=1)
+    supplier_name: str = Field(min_length=1)
+    agent_role: AgentRole
+    recommendation: str = Field(min_length=1)
+    score: Optional[float] = None
+    confidence: Optional[float] = None
+    evidence_snapshot: dict[str, Any] = Field(default_factory=dict)
+    evaluation_details: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[datetime] = None
+
+
+class HumanDecisionRecord(BaseModel):
+    id: Optional[int] = None
+    candidate_id: str = Field(min_length=1)
+    supplier_sku: str = Field(min_length=1)
+    pipeline_run_id: Optional[str] = None
+    decision: HumanDecisionType
+    reviewer_id: str = Field(min_length=1)
+    reason_category: str = Field(min_length=1)
+    notes: Optional[str] = None
+    price_adjustment: Optional[float] = None
+    decided_at: Optional[datetime] = None
+
+
+class RealizedOutcomeRecord(BaseModel):
+    id: Optional[int] = None
+    supplier_sku: str = Field(min_length=1)
+    supplier_name: str = Field(min_length=1)
+    listing_id: Optional[str] = None
+    listed_at: Optional[datetime] = None
+    first_sale_at: Optional[datetime] = None
+    days_to_first_sale: Optional[int] = None
+    units_sold: int = Field(default=0, ge=0)
+    actual_sale_price: Optional[float] = None
+    actual_supplier_cost: Optional[float] = None
+    actual_platform_fees: Optional[float] = None
+    realized_net_profit: Optional[float] = None
+    realized_margin_pct: Optional[float] = None
+    return_count: int = Field(default=0, ge=0)
+    return_reasons: list[str] = Field(default_factory=list)
+    supplier_fulfillment_issue: Optional[str] = None
+    seasonal_window_missed: bool = False
+    updated_at: Optional[datetime] = None
+
+
+class ScoutEvaluationResult(BaseModel):
+    sku: str = Field(min_length=1)
+    product_name: str = Field(min_length=1)
+    lane: ProductLane
+    seasonal_event: Optional[str] = None
+    seasonal_window_status: Optional[str] = None
+    competition_density: int = 50
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    score: int = Field(default=75, ge=0, le=100)
+    recommendation: str = "PROCEED"
+    reasons: list[str] = Field(default_factory=list)
+
+
+class CommercialEvaluationResult(BaseModel):
+    sku: str = Field(min_length=1)
+    proposed_price: float = Field(gt=0)
+    supplier_cost: float = Field(gt=0)
+    shipping: float = Field(default=0.0, ge=0)
+    platform_fee: float = Field(default=0.0, ge=0)
+    return_buffer: float = Field(default=0.0, ge=0)
+    total_cost: float
+    expected_profit: float
+    expected_margin: float
+    meets_minimum_margin: bool
+    supplier_valid: bool
+    policy_compatible: bool = True
+    policy_notes: Optional[str] = None
+    draft_title: str = Field(min_length=1)
+    category: str = Field(default="General Merchandise > Default Category")
+    shipping_service: str = Field(default="Standard Shipping")
+    recommendation: str = "PROCEED"
+    reasons: list[str] = Field(default_factory=list)
+
+
+class CriticEvaluationResult(BaseModel):
+    sku: str = Field(min_length=1)
+    recommendation: CommerceCriticRecommendation
+    risk_score: int = Field(default=0, ge=0, le=100)
+    margin_cushion: float
+    risk_flags: list[str] = Field(default_factory=list)
+    stress_test_results: dict[str, Any] = Field(default_factory=dict)
+    reasoning: str = Field(min_length=1)
+
+
+class PipelineRunResult(BaseModel):
+    pipeline_run_id: str
+    supplier_sku: str
+    supplier_name: str
+    candidate_id: str
+    gate_status: PipelineGateStatus
+    queue_status: CandidateStatus
+    auto_approved: bool = False
+    published: bool = False
+    human_approval_required: bool = True
+    scout_eval: ScoutEvaluationResult
+    commercial_eval: CommercialEvaluationResult
+    critic_eval: CriticEvaluationResult
+    reasons: list[str] = Field(default_factory=list)

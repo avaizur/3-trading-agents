@@ -14,6 +14,7 @@ def test_supplier_policy_cli_persists_rules(tmp_path):
         "--return-route", "SUPPLIER",
         "--rma-required", "yes",
         "--return-postage", "BUYER",
+        "--supplier-fault-resolution", "REFUND_OR_REPLACE_AFTER_EVIDENCE",
         "--db", str(db_path),
     ])
 
@@ -28,3 +29,7 @@ def test_supplier_policy_cli_persists_rules(tmp_path):
     assert rules.return_route.value == "SUPPLIER"
     assert rules.rma_required is True
     assert rules.return_postage.value == "BUYER"
+    assert (
+        rules.supplier_fault_resolution
+        == "REFUND_OR_REPLACE_AFTER_EVIDENCE"
+    )

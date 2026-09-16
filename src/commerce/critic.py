@@ -1,3 +1,4 @@
-from src.commerce.agents.critic import run
+from src.commerce.agents.critic import CommerceCriticAgent, run
 
-__all__ = ["run"]
+__all__ = ["CommerceCriticAgent", "run"]
+
