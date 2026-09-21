@@ -1,6 +1,7 @@
 from typing import Optional, Union
 
 from src.commerce.database import CommerceDatabase
+from src.commerce.storage import CommerceStore
 from src.commerce.schemas import (
     CandidateStatus,
     DraftReviewStatus,
@@ -76,7 +77,7 @@ class CandidateQueue:
 
     def __init__(
         self,
-        db: Optional[CommerceDatabase] = None,
+        db: Optional[CommerceStore] = None,
         db_path: str = "data/commerce.db",
     ):
         if db is not None:

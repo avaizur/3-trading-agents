@@ -2,6 +2,7 @@ from datetime import date
 from typing import Any, Optional
 
 from src.commerce.profit_engine import DEFAULT_MIN_MARGIN_PCT, calculate_profit
+from src.commerce.storage import CommerceStore
 from src.commerce.schemas import (
     CommercialEvaluationResult,
     CommerceCriticRecommendation,
@@ -21,7 +22,7 @@ class CommerceCriticAgent:
     Outputs CONTINUE, CAUTION, or BLOCK.
     """
 
-    def __init__(self, db=None):
+    def __init__(self, db: Optional[CommerceStore] = None):
         self.db = db
 
     def evaluate(

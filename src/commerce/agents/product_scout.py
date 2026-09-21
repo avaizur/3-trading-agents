@@ -2,6 +2,7 @@ from datetime import date
 from typing import Any, Optional
 
 from src.commerce.market_research import MarketResearchService
+from src.commerce.storage import CommerceStore
 from src.commerce.opportunity_scoring import (
     MarketOpportunityScorer,
     ScoredMarketOpportunity,
@@ -31,7 +32,7 @@ class ProductScoutAgent:
     seasonal buying windows, category traits, and competition evidence.
     """
 
-    def __init__(self, db=None):
+    def __init__(self, db: Optional[CommerceStore] = None):
         self.db = db
 
     def research_market(

@@ -1,6 +1,7 @@
 from typing import Any, Optional
 
 from src.commerce.policy_compatibility import match_supplier_to_ebay_policies
+from src.commerce.storage import CommerceStore
 from src.commerce.profit_engine import DEFAULT_MIN_MARGIN_PCT, calculate_profit
 from src.commerce.schemas import (
     CommercialEvaluationResult,
@@ -25,7 +26,7 @@ class CommercialAgent:
     listing feasibility, and marketplace policy compatibility.
     """
 
-    def __init__(self, db=None):
+    def __init__(self, db: Optional[CommerceStore] = None):
         self.db = db
 
     def evaluate(

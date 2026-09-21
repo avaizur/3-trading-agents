@@ -27,6 +27,7 @@ from src.commerce.agents.critic import CommerceCriticAgent
 from src.commerce.agents.product_scout import ProductScoutAgent
 from src.commerce.agents.seller_a import CommercialAgent
 from src.commerce.database import CommerceDatabase
+from src.commerce.storage import CommerceStore
 from src.commerce.profit_engine import DEFAULT_MIN_MARGIN_PCT
 from src.commerce.queue import CandidateQueue
 from src.commerce.schemas import (
@@ -53,7 +54,7 @@ class ThreeAgentPipeline:
 
     def __init__(
         self,
-        db: Optional[CommerceDatabase] = None,
+        db: Optional[CommerceStore] = None,
         db_path: str = "data/commerce.db",
     ):
         self.db = db if db is not None else CommerceDatabase(db_path=db_path)
