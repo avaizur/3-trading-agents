@@ -79,3 +79,36 @@ output "commerce_table_name" {
 output "commerce_lambda_role_arn" {
   value = aws_iam_role.commerce_lambda.arn
 }
+
+resource "aws_lambda_function" "commerce_smoke" {
+  function_name = "${var.project_name}-commerce-smoke"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-smoke.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-smoke.zip")
+
+  timeout     = 10
+  memory_size = 128
+
+  environment {
+    variables = {
+      COMMERCE_TABLE_NAME = aws_dynamodb_table.commerce.name
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic,
+    aws_iam_role_policy.commerce_dynamodb
+  ]
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+output "commerce_smoke_lambda_name" {
+  value = aws_lambda_function.commerce_smoke.function_name
+}

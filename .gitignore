@@ -12,3 +12,9 @@ data/*.db
 tfplan
 *.tfplan
 crash.log
+
+# Generated Lambda packages
+/build/
+
+# Local commerce runtime data
+/data/
