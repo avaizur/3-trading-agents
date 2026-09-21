@@ -206,7 +206,20 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
         }
 
         OutputPath = "$.Payload"
-        End        = true
+        Next       = "SendDailySummary"
+      }
+
+      SendDailySummary = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::sns:publish"
+
+        Parameters = {
+          TopicArn    = aws_sns_topic.commerce_daily_watch.arn
+          Subject     = "3 Trading Agents - Daily Commerce Watch"
+          "Message.$" = "States.Format('Daily Commerce Watch completed.\n\nProducts monitored: {}\nWatch status counts: {}\nSupplier counts: {}\nHuman approval required: {}\n\nNo automatic publishing, repricing or ordering was performed.', $.product_count, States.JsonToString($.watch_counts), States.JsonToString($.supplier_counts), $.human_approval_required)"
+        }
+
+        End = true
       }
     }
   })
@@ -217,7 +230,8 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
   }
 
   depends_on = [
-    aws_iam_role_policy.commerce_step_functions_lambda
+    aws_iam_role_policy.commerce_step_functions_lambda,
+    aws_iam_role_policy.commerce_step_functions_sns
   ]
 }
 
@@ -279,4 +293,43 @@ output "commerce_daily_watch_state_machine_arn" {
 
 output "commerce_daily_watch_schedule" {
   value = aws_cloudwatch_event_rule.commerce_daily_watch.schedule_expression
+}
+
+# ------------------------------------------------------------------
+# Daily Commerce Watch notification
+# ------------------------------------------------------------------
+
+resource "aws_sns_topic" "commerce_daily_watch" {
+  name = "${var.project_name}-commerce-daily-watch"
+
+  tags = {
+    Project = var.project_name
+    Purpose = "daily-commerce-watch"
+  }
+}
+
+resource "aws_sns_topic_subscription" "commerce_daily_watch_email" {
+  topic_arn = aws_sns_topic.commerce_daily_watch.arn
+  protocol  = "email"
+  endpoint  = var.commerce_alert_email
+}
+
+resource "aws_iam_role_policy" "commerce_step_functions_sns" {
+  name = "${var.project_name}-commerce-step-functions-sns"
+  role = aws_iam_role.commerce_step_functions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "sns:Publish"
+      ]
+      Resource = aws_sns_topic.commerce_daily_watch.arn
+    }]
+  })
+}
+
+output "commerce_daily_watch_topic_arn" {
+  value = aws_sns_topic.commerce_daily_watch.arn
 }

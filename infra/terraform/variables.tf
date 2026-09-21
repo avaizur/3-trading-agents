@@ -15,3 +15,9 @@ variable "root_volume_size" {
   type        = number
   default     = 12
 }
+
+variable "commerce_alert_email" {
+  description = "Email address for Daily Commerce Watch SNS notifications"
+  type        = string
+  sensitive   = true
+}
