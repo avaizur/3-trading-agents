@@ -146,3 +146,137 @@ resource "aws_lambda_function" "commerce_watch" {
 output "commerce_watch_lambda_name" {
   value = aws_lambda_function.commerce_watch.function_name
 }
+
+# ------------------------------------------------------------------
+# Daily Commerce Watch orchestration
+# ------------------------------------------------------------------
+
+resource "aws_iam_role" "commerce_step_functions" {
+  name = "${var.project_name}-commerce-step-functions-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "states.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+resource "aws_iam_role_policy" "commerce_step_functions_lambda" {
+  name = "${var.project_name}-commerce-step-functions-lambda"
+  role = aws_iam_role.commerce_step_functions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "lambda:InvokeFunction"
+      ]
+      Resource = aws_lambda_function.commerce_watch.arn
+    }]
+  })
+}
+
+resource "aws_sfn_state_machine" "commerce_daily_watch" {
+  name     = "${var.project_name}-commerce-daily-watch"
+  role_arn = aws_iam_role.commerce_step_functions.arn
+
+  definition = jsonencode({
+    Comment = "Daily Commerce Watch V1"
+    StartAt = "RunCommerceWatch"
+    States = {
+      RunCommerceWatch = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+
+        Parameters = {
+          FunctionName = aws_lambda_function.commerce_watch.arn
+          Payload = {
+            "trigger" = "daily"
+          }
+        }
+
+        OutputPath = "$.Payload"
+        End        = true
+      }
+    }
+  })
+
+  tags = {
+    Project = var.project_name
+    Purpose = "daily-commerce-watch"
+  }
+
+  depends_on = [
+    aws_iam_role_policy.commerce_step_functions_lambda
+  ]
+}
+
+resource "aws_iam_role" "commerce_eventbridge" {
+  name = "${var.project_name}-commerce-eventbridge-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "events.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+resource "aws_iam_role_policy" "commerce_eventbridge_step_functions" {
+  name = "${var.project_name}-commerce-eventbridge-step-functions"
+  role = aws_iam_role.commerce_eventbridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "states:StartExecution"
+      ]
+      Resource = aws_sfn_state_machine.commerce_daily_watch.arn
+    }]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "commerce_daily_watch" {
+  name                = "${var.project_name}-commerce-daily-watch"
+  description         = "Run the 3 Trading Agents commerce watch once every 24 hours"
+  schedule_expression = "rate(1 day)"
+
+  tags = {
+    Project = var.project_name
+    Purpose = "daily-commerce-watch"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "commerce_daily_watch" {
+  rule     = aws_cloudwatch_event_rule.commerce_daily_watch.name
+  arn      = aws_sfn_state_machine.commerce_daily_watch.arn
+  role_arn = aws_iam_role.commerce_eventbridge.arn
+}
+
+output "commerce_daily_watch_state_machine_arn" {
+  value = aws_sfn_state_machine.commerce_daily_watch.arn
+}
+
+output "commerce_daily_watch_schedule" {
+  value = aws_cloudwatch_event_rule.commerce_daily_watch.schedule_expression
+}
