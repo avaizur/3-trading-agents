@@ -12,6 +12,7 @@ import boto3
 
 from src.commerce.adapters.ebay_browse import EBayBrowseResearchAdapter
 from src.commerce.ebay_oauth import refresh_access_token
+from src.commerce.economics_policy import ebay_uk_private_economics
 from src.commerce.profit_engine import calculate_profit
 from src.commerce.schemas import MarketValidationStatus, SupplierBackedProduct
 
@@ -106,76 +107,58 @@ def refresh_product_market(
     prices = [float(listing.price) for listing in comparable]
     market_price = round(float(median(prices)), 2)
 
+    economics = ebay_uk_private_economics(
+        sale_price=market_price,
+        supplier_name=product.supplier_name,
+    )
+
+    decision = calculate_profit(
+        supplier_cost=product.supplier_cost,
+        shipping=economics.shipping,
+        platform_fee=economics.platform_fee,
+        return_buffer=economics.return_allowance,
+        sale_price=market_price,
+    )
+
     updates = {
         "market_price": market_price,
+        "platform_fees": economics.platform_fee,
+        "return_allowance": economics.return_allowance,
         "market_price_validated": True,
+        "platform_fees_validated": True,
+        "return_allowance_validated": True,
+        "expected_profit": decision.net_profit,
+        "expected_margin": decision.margin_pct,
+        "market_validation_status": (
+            MarketValidationStatus.PASS
+            if decision.allowed
+            else MarketValidationStatus.REJECT
+        ),
+        "profitable": decision.allowed,
+        "validation_reason": decision.reason,
         "updated_at": datetime.now(timezone.utc),
     }
 
-    economics_complete = (
-        product.platform_fees is not None
-        and product.return_allowance is not None
-        and product.platform_fees_validated
-        and product.return_allowance_validated
-    )
+    payload = product.model_dump()
+    payload.update(updates)
+
+    refreshed_product = SupplierBackedProduct.model_validate(payload)
 
     evidence = {
         "refreshed": True,
         "market_price": market_price,
+        "platform_fee": economics.platform_fee,
+        "return_allowance": economics.return_allowance,
+        "shipping": economics.shipping,
         "comparable_count": len(comparable),
         "sample_item_ids": [
             listing.item_id
             for listing in comparable[:5]
         ],
+        "profit_gate_run": True,
+        "expected_profit": decision.net_profit,
+        "expected_margin": decision.margin_pct,
+        "profit_gate_allowed": decision.allowed,
     }
-
-    if economics_complete:
-        decision = calculate_profit(
-            supplier_cost=product.supplier_cost,
-            shipping=0.0,
-            platform_fee=product.platform_fees,
-            return_buffer=product.return_allowance,
-            sale_price=market_price,
-        )
-
-        updates.update(
-            {
-                "expected_profit": decision.net_profit,
-                "expected_margin": decision.margin_pct,
-                "market_validation_status": (
-                    MarketValidationStatus.PASS
-                    if decision.allowed
-                    else MarketValidationStatus.REJECT
-                ),
-                "profitable": decision.allowed,
-                "validation_reason": decision.reason,
-            }
-        )
-
-        evidence.update(
-            {
-                "profit_gate_run": True,
-                "expected_profit": decision.net_profit,
-                "expected_margin": decision.margin_pct,
-                "profit_gate_allowed": decision.allowed,
-            }
-        )
-    else:
-        updates.update(
-            {
-                "market_validation_status": MarketValidationStatus.PENDING,
-                "profitable": False,
-                "validation_reason": (
-                    "Live market price refreshed; fee or return inputs "
-                    "still require validation."
-                ),
-            }
-        )
-
-        evidence["profit_gate_run"] = False
-
-    refreshed_product = product.model_copy(
-        update=updates,
-    )
 
     return refreshed_product, evidence
