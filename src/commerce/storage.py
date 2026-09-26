@@ -75,3 +75,10 @@ class CommerceStore(Protocol):
         *args: Any,
         **kwargs: Any,
     ) -> Any: ...
+
+    def list_agent_evaluations(
+        self,
+        supplier_sku: Any = None,
+        pipeline_run_id: Any = None,
+        limit: int = 100,
+    ) -> list[Any]: ...

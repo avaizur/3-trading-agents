@@ -356,8 +356,18 @@ class ThreeAgentPipeline:
 
     @staticmethod
     def market_evidence_ready(product: SupplierBackedProduct) -> bool:
-        """Return True only when a staged product has a usable validated market price."""
-        return product.market_price is not None and product.market_price > 0
+        """Return True only when a staged product has passed market validation.
+
+        Requires:
+        - market_validation_status is PASS (all economics independently validated)
+        - market_price is set and positive
+        """
+        from src.commerce.schemas import MarketValidationStatus
+        return (
+            product.market_validation_status is MarketValidationStatus.PASS
+            and product.market_price is not None
+            and product.market_price > 0
+        )
 
     def run_staged_batch(
         self,

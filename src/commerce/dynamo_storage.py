@@ -474,3 +474,28 @@ class DynamoCommerceStore:
         )
 
         return evaluations[:limit]
+
+    # ------------------------------------------------------------------
+    # Supplier checks (protocol stubs – not stored in DynamoDB V1)
+    # ------------------------------------------------------------------
+
+    def record_supplier_check(self, check: Any) -> Any:
+        """Not yet persisted in DynamoDB; returns the check unchanged."""
+        return check
+
+    def get_supplier_checks(
+        self,
+        candidate_id: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> list:
+        """Not yet persisted in DynamoDB; returns an empty list."""
+        return []
+
+    # ------------------------------------------------------------------
+    # Manual supplier matches (protocol stub – not stored in DynamoDB V1)
+    # ------------------------------------------------------------------
+
+    def get_manual_supplier_matches(self, ebay_item_id: str) -> list[dict]:
+        """Not yet persisted in DynamoDB; returns an empty list."""
+        return []
