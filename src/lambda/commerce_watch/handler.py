@@ -4,18 +4,20 @@ Reads supplier-backed products from DynamoDB, refreshes stale/missing
 market evidence from eBay, applies the deterministic profit gate when
 all economics are available, and persists a watch-run summary.
 
-For products whose market_validation_status is PASS the three-agent
-pipeline (Scout → Seller/Commercial → Critic) is run.  Agent evaluations
-are persisted in DynamoDB.  An eBay listing draft is created only when
-all agent checks and deterministic safety gates pass
-(gate_status == READY_FOR_HUMAN_REVIEW).  The draft is never published
-and human approval remains mandatory.
+For products whose market_validation_status is PASS, the three-agent
+pipeline (Scout -> Seller/Commercial -> Critic) is run and agent
+evaluations are persisted in DynamoDB.
+
+A successful three-agent result stops at READY_FOR_HUMAN_REVIEW.
+Human approval is required before a candidate can move to
+APPROVED_FOR_LISTING and before an eBay draft can be created.
 
 Safety:
+- never auto-approves
+- never creates a draft before human candidate approval
 - never publishes
 - never reprices marketplace listings
 - never places supplier orders
-- never auto-approves
 """
 
 from __future__ import annotations
@@ -115,18 +117,16 @@ def lambda_handler(event, context):
         region_name=aws_region,
     )
 
-    # Build the 3-agent pipeline backed by DynamoDB so agent evaluations
-    # are persisted alongside all other commerce entities.
     pipeline = ThreeAgentPipeline(db=store)
 
     products = store.list_supplier_backed_products()
 
-    supplier_counts: Counter = Counter()
-    watch_counts: Counter = Counter()
-    refresh_counts: Counter = Counter()
-    pipeline_counts: Counter = Counter()
-    decisions = []
+    supplier_counts = Counter()
+    watch_counts = Counter()
+    refresh_counts = Counter()
+    pipeline_counts = Counter()
 
+    decisions = []
     adapter = None
 
     for product in products:
@@ -169,7 +169,7 @@ def lambda_handler(event, context):
                     {
                         "refreshed": False,
                         "reason": (
-                            f"Live market refresh failed: "
+                            "Live market refresh failed: "
                             f"{type(exc).__name__}"
                         ),
                     }
@@ -185,17 +185,24 @@ def lambda_handler(event, context):
             and refresh_evidence.get("attempted")
             and not refresh_evidence.get("refreshed")
         ):
-            reason = refresh_evidence.get("reason", initial_reason)
+            reason = refresh_evidence.get(
+                "reason",
+                initial_reason,
+            )
 
         watch_counts[watch_status] += 1
 
-        # ------------------------------------------------------------------
-        # Three-agent pipeline: run only for market-validation PASS products
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # Three-agent pipeline
+        #
+        # Only products that have passed deterministic market/economics
+        # validation are allowed into Scout -> Commercial -> Critic.
+        # --------------------------------------------------------------
         pipeline_evidence: dict = {}
 
         if (
-            product.market_validation_status is MarketValidationStatus.PASS
+            product.market_validation_status
+            is MarketValidationStatus.PASS
             and ThreeAgentPipeline.market_evidence_ready(product)
         ):
             try:
@@ -204,20 +211,34 @@ def lambda_handler(event, context):
                     target_price=product.market_price,
                     platform_fee=product.platform_fees,
                     return_allowance=product.return_allowance,
-                    persist_history=True,  # agent evals written to DynamoDB
+                    persist_history=True,
                 )
 
                 gate_value = pipeline_result.gate_status.value
 
                 pipeline_evidence = {
-                    "pipeline_run_id": pipeline_result.pipeline_run_id,
+                    "pipeline_run_id": (
+                        pipeline_result.pipeline_run_id
+                    ),
                     "gate_status": gate_value,
-                    "queue_status": pipeline_result.queue_status.value,
-                    "scout_recommendation": pipeline_result.scout_eval.recommendation,
-                    "commercial_margin": pipeline_result.commercial_eval.expected_margin,
-                    "critic_recommendation": pipeline_result.critic_eval.recommendation.value,
+                    "queue_status": (
+                        pipeline_result.queue_status.value
+                    ),
+                    "scout_recommendation": (
+                        pipeline_result.scout_eval.recommendation
+                    ),
+                    "commercial_margin": (
+                        pipeline_result
+                        .commercial_eval
+                        .expected_margin
+                    ),
+                    "critic_recommendation": (
+                        pipeline_result
+                        .critic_eval
+                        .recommendation
+                        .value
+                    ),
                     "reasons": pipeline_result.reasons,
-                    # Hard-coded safety guarantees reflected in the summary
                     "auto_approved": False,
                     "published": False,
                     "human_approval_required": True,
@@ -225,26 +246,36 @@ def lambda_handler(event, context):
 
                 pipeline_counts[gate_value] += 1
 
-                # Create an eBay listing draft only when all agents and
-                # deterministic gates pass.  The draft is NOT published;
-                # human approval is still required.
-                if pipeline_result.gate_status is PipelineGateStatus.READY_FOR_HUMAN_REVIEW:
-                    try:
-                        pipeline.queue.create_ebay_draft(
-                            pipeline_result.candidate_id,
-                        )
-                        pipeline_evidence["draft_created"] = True
-                    except Exception as draft_exc:
-                        # Draft creation may fail if the candidate has not yet
-                        # been advanced to APPROVED_FOR_LISTING (expected for
-                        # fresh REVIEW candidates).  Log and continue.
-                        pipeline_evidence["draft_created"] = False
-                        pipeline_evidence["draft_error"] = type(draft_exc).__name__
+                # IMPORTANT:
+                # READY_FOR_HUMAN_REVIEW is intentionally the end of
+                # automatic processing.
+                #
+                # Existing lifecycle:
+                #
+                # READY_FOR_HUMAN_REVIEW
+                # -> human approve_for_listing()
+                # -> APPROVED_FOR_LISTING
+                # -> create_ebay_draft()
+                # -> separate human approval before publish
+                #
+                # Do not create the draft here.
+                if (
+                    pipeline_result.gate_status
+                    is PipelineGateStatus.READY_FOR_HUMAN_REVIEW
+                ):
+                    pipeline_evidence["draft_created"] = False
+                    pipeline_evidence[
+                        "human_review_required"
+                    ] = True
 
             except Exception as pipeline_exc:
                 pipeline_counts["ERROR"] += 1
+
                 pipeline_evidence = {
-                    "error": f"{type(pipeline_exc).__name__}: {pipeline_exc}",
+                    "error": (
+                        "Pipeline failed: "
+                        f"{type(pipeline_exc).__name__}"
+                    ),
                     "auto_approved": False,
                     "published": False,
                     "human_approval_required": True,
