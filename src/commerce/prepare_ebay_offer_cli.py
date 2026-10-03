@@ -14,6 +14,7 @@ import json
 import os
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError
 from pathlib import Path
 
 import boto3
@@ -196,11 +197,17 @@ def main() -> int:
         "marketplace_id": "EBAY_GB",
     })
 
-    existing = _request(
-        "GET",
-        f"/offer?{existing_query}",
-        token,
-    ).get("offers", [])
+    try:
+        existing = _request(
+            "GET",
+            f"/offer?{existing_query}",
+            token,
+        ).get("offers", [])
+    except HTTPError as exc:
+        if exc.code == 404:
+            existing = []
+        else:
+            raise
 
     if existing:
         offer_id = existing[0]["offerId"]
