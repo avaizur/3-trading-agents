@@ -129,6 +129,7 @@ resource "aws_lambda_function" "commerce_watch" {
   environment {
     variables = {
       COMMERCE_TABLE_NAME = aws_dynamodb_table.commerce.name
+      APPROVAL_BASE_URL   = "${aws_apigatewayv2_api.commerce_approval.api_endpoint}/review"
     }
   }
 
@@ -332,4 +333,97 @@ resource "aws_iam_role_policy" "commerce_step_functions_sns" {
 
 output "commerce_daily_watch_topic_arn" {
   value = aws_sns_topic.commerce_daily_watch.arn
+}
+
+# ------------------------------------------------------------------
+# Commerce human approval API
+# ------------------------------------------------------------------
+
+resource "aws_lambda_function" "commerce_approval" {
+  function_name = "${var.project_name}-commerce-approval"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-approval.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-approval.zip")
+
+  timeout     = 15
+  memory_size = 256
+
+  environment {
+    variables = {
+      COMMERCE_TABLE_NAME = aws_dynamodb_table.commerce.name
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic,
+    aws_iam_role_policy.commerce_dynamodb
+  ]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "commerce-human-approval"
+  }
+}
+
+
+resource "aws_apigatewayv2_api" "commerce_approval" {
+  name          = "${var.project_name}-commerce-approval"
+  protocol_type = "HTTP"
+
+  tags = {
+    Project = var.project_name
+    Purpose = "commerce-human-approval"
+  }
+}
+
+
+resource "aws_apigatewayv2_integration" "commerce_approval" {
+  api_id = aws_apigatewayv2_api.commerce_approval.id
+
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.commerce_approval.invoke_arn
+  payload_format_version = "2.0"
+}
+
+
+resource "aws_apigatewayv2_route" "commerce_approval_get" {
+  api_id = aws_apigatewayv2_api.commerce_approval.id
+
+  route_key = "GET /review"
+  target    = "integrations/${aws_apigatewayv2_integration.commerce_approval.id}"
+}
+
+
+resource "aws_apigatewayv2_route" "commerce_approval_post" {
+  api_id = aws_apigatewayv2_api.commerce_approval.id
+
+  route_key = "POST /review"
+  target    = "integrations/${aws_apigatewayv2_integration.commerce_approval.id}"
+}
+
+
+resource "aws_apigatewayv2_stage" "commerce_approval" {
+  api_id = aws_apigatewayv2_api.commerce_approval.id
+
+  name        = "$default"
+  auto_deploy = true
+}
+
+
+resource "aws_lambda_permission" "commerce_approval_api" {
+  statement_id  = "AllowCommerceApprovalApi"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.commerce_approval.function_name
+  principal     = "apigateway.amazonaws.com"
+
+  source_arn = "${aws_apigatewayv2_api.commerce_approval.execution_arn}/*/*"
+}
+
+
+output "commerce_approval_url" {
+  value = "${aws_apigatewayv2_api.commerce_approval.api_endpoint}/review"
 }

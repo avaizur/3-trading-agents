@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+from src.commerce.approval_service import create_candidate_approval
 from src.commerce.dynamo_storage import DynamoCommerceStore
 from src.commerce.live_market_refresh import (
     load_ebay_adapter,
@@ -110,6 +111,10 @@ def lambda_handler(event, context):
     ebay_secret_id = os.environ.get(
         "EBAY_SECRET_ID",
         "3-trading-agents/ebay-production",
+    )
+    approval_base_url = os.environ.get(
+        "APPROVAL_BASE_URL",
+        "",
     )
 
     store = DynamoCommerceStore(
@@ -267,6 +272,57 @@ def lambda_handler(event, context):
                     pipeline_evidence[
                         "human_review_required"
                     ] = True
+
+                    candidate_id = (
+                        pipeline_result.candidate_id
+                        if hasattr(pipeline_result, "candidate_id")
+                        else f"CAND-EBAY-{product.supplier_sku}"
+                    )
+
+                    if approval_base_url:
+                        try:
+                            approval = create_candidate_approval(
+                                table_name=table_name,
+                                candidate_id=candidate_id,
+                                approval_base_url=approval_base_url,
+                                region_name=aws_region,
+                            )
+
+                            pipeline_evidence[
+                                "approval_request_created"
+                            ] = True
+
+                            pipeline_evidence[
+                                "approval_id"
+                            ] = approval["approval_id"]
+
+                            pipeline_evidence[
+                                "approval_url"
+                            ] = approval["review_url"]
+
+                            pipeline_evidence[
+                                "approval_expires_at"
+                            ] = approval["expires_at"]
+
+                        except Exception as approval_exc:
+                            pipeline_evidence[
+                                "approval_request_created"
+                            ] = False
+
+                            pipeline_evidence[
+                                "approval_error"
+                            ] = (
+                                "Approval request failed: "
+                                f"{type(approval_exc).__name__}"
+                            )
+                    else:
+                        pipeline_evidence[
+                            "approval_request_created"
+                        ] = False
+
+                        pipeline_evidence[
+                            "approval_error"
+                        ] = "APPROVAL_BASE_URL is not configured."
 
             except Exception as pipeline_exc:
                 pipeline_counts["ERROR"] += 1
