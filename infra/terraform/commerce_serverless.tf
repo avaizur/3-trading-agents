@@ -217,7 +217,7 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
         Parameters = {
           TopicArn    = aws_sns_topic.commerce_daily_watch.arn
           Subject     = "3 Trading Agents - Daily Commerce Watch"
-          "Message.$" = "States.Format('Daily Commerce Watch completed.\n\nProducts monitored: {}\nWatch status counts: {}\nSupplier counts: {}\nHuman approval required: {}\n\nNo automatic publishing, repricing or ordering was performed.', $.product_count, States.JsonToString($.watch_counts), States.JsonToString($.supplier_counts), $.human_approval_required)"
+          "Message.$" = "States.Format('Daily Commerce Watch completed.\n\nProducts monitored: {}\nWatch status counts: {}\nSupplier counts: {}\nHuman approval required: {}\n\nProducts and approval links:\n{}\n\nNo automatic publishing, repricing or ordering was performed.', $.product_count, States.JsonToString($.watch_counts), States.JsonToString($.supplier_counts), $.human_approval_required, States.JsonToString($.decisions))"
         }
 
         End = true
