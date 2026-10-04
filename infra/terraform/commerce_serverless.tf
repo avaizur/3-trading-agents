@@ -544,3 +544,42 @@ output "commerce_supplier_catalog_bucket" {
 output "commerce_supplier_ingest_lambda_name" {
   value = aws_lambda_function.commerce_supplier_ingest.function_name
 }
+
+# ------------------------------------------------------------------
+# Automatic Go Dropship product discovery
+# ------------------------------------------------------------------
+
+resource "aws_lambda_function" "commerce_supplier_discovery" {
+  function_name = "${var.project_name}-commerce-supplier-discovery"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-supplier-discovery.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-supplier-discovery.zip")
+
+  timeout     = 120
+  memory_size = 256
+
+  environment {
+    variables = {
+      COMMERCE_TABLE_NAME    = aws_dynamodb_table.commerce.name
+      DISCOVERY_MAX_PRODUCTS = "20"
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic,
+    aws_iam_role_policy.commerce_dynamodb
+  ]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "automatic-supplier-discovery"
+  }
+}
+
+output "commerce_supplier_discovery_lambda_name" {
+  value = aws_lambda_function.commerce_supplier_discovery.function_name
+}
