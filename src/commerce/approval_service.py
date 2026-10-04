@@ -15,6 +15,66 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def find_active_candidate_approval(
+    *,
+    table_name: str,
+    candidate_id: str,
+    region_name: str = "eu-west-2",
+    dynamodb_resource=None,
+) -> dict[str, Any] | None:
+    """Return an existing active approval for this candidate, if one exists."""
+
+    if dynamodb_resource is None:
+        dynamodb_resource = boto3.resource(
+            "dynamodb",
+            region_name=region_name,
+        )
+
+    table = dynamodb_resource.Table(table_name)
+
+    response = table.scan(
+        FilterExpression=(
+            "entity_type = :entity "
+            "AND candidate_id = :candidate "
+            "AND (#status = :pending OR #status = :publish)"
+        ),
+        ExpressionAttributeNames={
+            "#status": "status",
+        },
+        ExpressionAttributeValues={
+            ":entity": "COMMERCE_APPROVAL",
+            ":candidate": candidate_id,
+            ":pending": "PENDING",
+            ":publish": "PENDING_PUBLISH",
+        },
+    )
+
+    now = _utc_now()
+
+    for item in response.get("Items", []):
+        expires_raw = item.get("expires_at")
+
+        if expires_raw:
+            try:
+                expires_at = datetime.fromisoformat(expires_raw)
+            except ValueError:
+                continue
+
+            if expires_at <= now:
+                continue
+
+        return {
+            "approval_id": item["approval_id"],
+            "candidate_id": candidate_id,
+            "status": item["status"],
+            "expires_at": item.get("expires_at"),
+            "review_url": None,
+            "existing": True,
+        }
+
+    return None
+
+
 def create_candidate_approval(
     *,
     table_name: str,
@@ -40,6 +100,16 @@ def create_candidate_approval(
         )
 
     table = dynamodb_resource.Table(table_name)
+
+    existing = find_active_candidate_approval(
+        table_name=table_name,
+        candidate_id=candidate_id,
+        region_name=region_name,
+        dynamodb_resource=dynamodb_resource,
+    )
+
+    if existing is not None:
+        return existing
 
     approval_id = secrets.token_urlsafe(18)
     token = secrets.token_urlsafe(32)
@@ -87,4 +157,5 @@ def create_candidate_approval(
         "status": "PENDING",
         "expires_at": expires_at.isoformat(),
         "review_url": review_url,
+        "existing": False,
     }

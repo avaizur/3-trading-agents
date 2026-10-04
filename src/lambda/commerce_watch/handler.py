@@ -29,6 +29,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from src.commerce.approval_service import create_candidate_approval
+from src.commerce.listing_facts_store import ListingFactsStore
 from src.commerce.dynamo_storage import DynamoCommerceStore
 from src.commerce.live_market_refresh import (
     load_ebay_adapter,
@@ -296,7 +297,37 @@ def lambda_handler(event, context):
                         else f"CAND-EBAY-{product.supplier_sku}"
                     )
 
-                    if approval_base_url:
+                    listing_facts = ListingFactsStore(
+                        table_name=table_name,
+                        region_name=aws_region,
+                    ).get(
+                        sku=product.supplier_sku,
+                    )
+
+                    if not listing_facts:
+                        pipeline_evidence[
+                            "listing_facts_ready"
+                        ] = False
+                        pipeline_evidence[
+                            "listing_facts_required"
+                        ] = True
+                        pipeline_evidence[
+                            "approval_request_created"
+                        ] = False
+                        pipeline_evidence[
+                            "approval_error"
+                        ] = (
+                            "Verified eBay listing facts are not ready."
+                        )
+                        pipeline_evidence[
+                            "human_approval_required"
+                        ] = False
+
+                    elif approval_base_url:
+                        pipeline_evidence[
+                            "listing_facts_ready"
+                        ] = True
+
                         try:
                             approval = create_candidate_approval(
                                 table_name=table_name,
@@ -306,20 +337,27 @@ def lambda_handler(event, context):
                             )
 
                             pipeline_evidence[
-                                "approval_request_created"
-                            ] = True
-
-                            pipeline_evidence[
                                 "approval_id"
                             ] = approval["approval_id"]
 
                             pipeline_evidence[
-                                "approval_url"
-                            ] = approval["review_url"]
-
-                            pipeline_evidence[
                                 "approval_expires_at"
                             ] = approval["expires_at"]
+
+                            if approval.get("existing"):
+                                pipeline_evidence[
+                                    "approval_request_created"
+                                ] = False
+                                pipeline_evidence[
+                                    "approval_already_pending"
+                                ] = True
+                            else:
+                                pipeline_evidence[
+                                    "approval_request_created"
+                                ] = True
+                                pipeline_evidence[
+                                    "approval_url"
+                                ] = approval["review_url"]
 
                         except Exception as approval_exc:
                             pipeline_evidence[
