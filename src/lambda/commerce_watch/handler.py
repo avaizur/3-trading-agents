@@ -205,7 +205,24 @@ def lambda_handler(event, context):
         # --------------------------------------------------------------
         pipeline_evidence: dict = {}
 
-        if (
+        live_listing = store.table.get_item(
+            Key={
+                "PK": f"LIVE_LISTING#EBAY#{product.supplier_sku}",
+                "SK": "META",
+            }
+        ).get("Item")
+
+        if live_listing:
+            pipeline_evidence = {
+                "skipped": True,
+                "reason": "SKU already has a recorded LIVE eBay listing.",
+                "listing_id": live_listing.get("listing_id"),
+                "published": True,
+                "human_approval_required": False,
+            }
+            pipeline_counts["ALREADY_LIVE"] += 1
+
+        elif (
             product.market_validation_status
             is MarketValidationStatus.PASS
             and ThreeAgentPipeline.market_evidence_ready(product)
