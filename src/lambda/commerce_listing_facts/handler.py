@@ -17,7 +17,7 @@ def lambda_handler(event, context):
 
     supplier_name = event["supplier_name"]
     supplier_sku = event["supplier_sku"]
-    source_url = event["source_url"]
+    source_url = event.get("source_url")
 
     store = DynamoCommerceStore(
         table_name=table_name,
@@ -33,6 +33,16 @@ def lambda_handler(event, context):
             "ok": False,
             "status": "PRODUCT_NOT_FOUND",
             "supplier_sku": supplier_sku,
+        }
+
+    source_url = source_url or product.source_url
+
+    if not source_url:
+        return {
+            "ok": False,
+            "status": "NEEDS_LISTING_FACTS",
+            "supplier_sku": supplier_sku,
+            "reason": "Supplier source URL is missing.",
         }
 
     supplier_html = _fetch(source_url)

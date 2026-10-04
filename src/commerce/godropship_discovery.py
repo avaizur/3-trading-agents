@@ -286,11 +286,19 @@ def save_new_products(store, products) -> dict:
             item.sku,
         )
 
+        now = datetime.now(timezone.utc)
+
         if current is not None:
+            updated = current.model_copy(
+                update={
+                    "source_url": item.url,
+                    "supplier_stock": item.stock,
+                    "updated_at": now,
+                }
+            )
+            store.save_supplier_backed_product(updated)
             existing += 1
             continue
-
-        now = datetime.now(timezone.utc)
 
         product = SupplierBackedProduct(
             supplier_name="Go Dropship",
@@ -298,6 +306,8 @@ def save_new_products(store, products) -> dict:
             product_name=item.title,
             supplier_cost=item.cost,
             lane=item.lane,
+            source_url=item.url,
+            supplier_stock=item.stock,
             created_at=now,
             updated_at=now,
         )

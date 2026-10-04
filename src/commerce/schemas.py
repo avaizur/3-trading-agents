@@ -131,6 +131,8 @@ class SupplierBackedProduct(BaseModel):
     product_name: str = Field(min_length=1)
     supplier_cost: float = Field(gt=0)
     lane: ProductLane
+    source_url: Optional[str] = None
+    supplier_stock: Optional[int] = Field(default=None, ge=0)
     market_price: Optional[float] = Field(default=None, gt=0)
     platform_fees: Optional[float] = Field(default=None, ge=0)
     return_allowance: Optional[float] = Field(default=None, ge=0)
