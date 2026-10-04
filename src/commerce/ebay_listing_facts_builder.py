@@ -1,0 +1,343 @@
+"""Build verified eBay listing facts from supplier and eBay metadata."""
+
+from __future__ import annotations
+
+import html
+import json
+import re
+import urllib.parse
+import urllib.request
+from typing import Any
+
+from src.commerce.ebay_inventory_service import load_access_token
+
+
+TAXONOMY_BASE = "https://api.ebay.com/commerce/taxonomy/v1"
+
+
+def _request_json(
+    url: str,
+    token: str,
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Accept-Language": "en-GB",
+        },
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=30,
+    ) as response:
+        return json.loads(
+            response.read().decode("utf-8")
+        )
+
+
+def get_uk_category_tree_id(token: str) -> str:
+    query = urllib.parse.urlencode(
+        {
+            "marketplace_id": "EBAY_GB",
+        }
+    )
+
+    payload = _request_json(
+        f"{TAXONOMY_BASE}/get_default_category_tree_id?{query}",
+        token,
+    )
+
+    tree_id = payload.get("categoryTreeId")
+
+    if not tree_id:
+        raise RuntimeError(
+            "eBay did not return a UK category tree ID."
+        )
+
+    return str(tree_id)
+
+
+def suggest_category(
+    *,
+    title: str,
+    token: str,
+    category_tree_id: str,
+) -> dict[str, str]:
+    query = urllib.parse.urlencode(
+        {
+            "q": title,
+        }
+    )
+
+    payload = _request_json(
+        (
+            f"{TAXONOMY_BASE}/category_tree/"
+            f"{category_tree_id}/get_category_suggestions?"
+            f"{query}"
+        ),
+        token,
+    )
+
+    suggestions = payload.get(
+        "categorySuggestions",
+        [],
+    )
+
+    if not suggestions:
+        raise RuntimeError(
+            "eBay returned no category suggestion."
+        )
+
+    category = suggestions[0].get(
+        "category",
+        {},
+    )
+
+    category_id = category.get("categoryId")
+    category_name = category.get("categoryName")
+
+    if not category_id:
+        raise RuntimeError(
+            "eBay category suggestion has no category ID."
+        )
+
+    return {
+        "category_id": str(category_id),
+        "category_name": str(category_name or ""),
+    }
+
+
+def get_category_aspects(
+    *,
+    category_id: str,
+    token: str,
+    category_tree_id: str,
+) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode(
+        {
+            "category_id": category_id,
+        }
+    )
+
+    payload = _request_json(
+        (
+            f"{TAXONOMY_BASE}/category_tree/"
+            f"{category_tree_id}/"
+            f"get_item_aspects_for_category?"
+            f"{query}"
+        ),
+        token,
+    )
+
+    return list(
+        payload.get("aspects", [])
+    )
+
+
+def required_aspect_names(
+    aspects: list[dict[str, Any]],
+) -> list[str]:
+    names = []
+
+    for aspect in aspects:
+        constraints = aspect.get(
+            "aspectConstraint",
+            {},
+        )
+
+        if constraints.get(
+            "aspectRequired"
+        ) is True:
+            name = aspect.get(
+                "localizedAspectName"
+            )
+
+            if name:
+                names.append(
+                    str(name)
+                )
+
+    return names
+
+
+def extract_supplier_images(
+    document: str,
+) -> list[str]:
+    urls = re.findall(
+        r'https?://[^"\']+\.(?:jpg|jpeg|png|webp)',
+        html.unescape(document),
+        flags=re.I,
+    )
+
+    result = []
+    seen = set()
+
+    for url in urls:
+        url = url.strip()
+
+        if "godropship" not in url.casefold():
+            continue
+
+        if url in seen:
+            continue
+
+        seen.add(url)
+        result.append(url)
+
+    return result[:12]
+
+
+def build_listing_metadata(
+    *,
+    title: str,
+    supplier_html: str,
+) -> dict[str, Any]:
+    token = load_access_token()
+
+    tree_id = get_uk_category_tree_id(
+        token,
+    )
+
+    category = suggest_category(
+        title=title,
+        token=token,
+        category_tree_id=tree_id,
+    )
+
+    aspects = get_category_aspects(
+        category_id=category["category_id"],
+        token=token,
+        category_tree_id=tree_id,
+    )
+
+    images = extract_supplier_images(
+        supplier_html
+    )
+
+    return {
+        "ebay_title": title[:80],
+        "ebay_category_id": (
+            category["category_id"]
+        ),
+        "ebay_category_name": (
+            category["category_name"]
+        ),
+        "image_urls": images,
+        "condition": "NEW",
+        "required_aspects": (
+            required_aspect_names(
+                aspects
+            )
+        ),
+        "taxonomy_aspects": aspects,
+    }
+
+
+def _normalized(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def resolve_required_aspects(
+    *,
+    title: str,
+    supplier_html: str,
+    taxonomy_aspects: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve only required eBay aspects supported by supplier evidence."""
+
+    source_text = _normalized(
+        title + " " + _plain_supplier_text(supplier_html)
+    )
+
+    resolved: dict[str, list[str]] = {}
+    missing: list[str] = []
+
+    for aspect in taxonomy_aspects:
+        constraints = aspect.get("aspectConstraint", {})
+
+        if constraints.get("aspectRequired") is not True:
+            continue
+
+        name = str(
+            aspect.get("localizedAspectName") or ""
+        ).strip()
+
+        if not name:
+            continue
+
+        values = [
+            str(item.get("localizedValue") or "").strip()
+            for item in aspect.get("aspectValues", [])
+            if item.get("localizedValue")
+        ]
+
+        match = None
+
+        for value in values:
+            normalized_value = _normalized(value)
+
+            if not normalized_value:
+                continue
+
+            if normalized_value in source_text:
+                match = value
+                break
+
+        if match is not None:
+            resolved[name] = [match]
+        else:
+            missing.append(name)
+
+    return {
+        "resolved": resolved,
+        "missing": missing,
+        "complete": not missing,
+    }
+
+
+def _plain_supplier_text(document: str) -> str:
+    value = re.sub(
+        r"<script\b[^>]*>.*?</script>",
+        " ",
+        document,
+        flags=re.I | re.S,
+    )
+    value = re.sub(
+        r"<style\b[^>]*>.*?</style>",
+        " ",
+        value,
+        flags=re.I | re.S,
+    )
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = html.unescape(value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def build_verified_listing_facts(
+    *,
+    title: str,
+    supplier_html: str,
+) -> dict[str, Any]:
+    metadata = build_listing_metadata(
+        title=title,
+        supplier_html=supplier_html,
+    )
+
+    aspect_result = resolve_required_aspects(
+        title=title,
+        supplier_html=supplier_html,
+        taxonomy_aspects=metadata["taxonomy_aspects"],
+    )
+
+    return {
+        "ebay_title": metadata["ebay_title"],
+        "ebay_category_id": metadata["ebay_category_id"],
+        "ebay_category_name": metadata["ebay_category_name"],
+        "image_urls": metadata["image_urls"],
+        "condition": metadata["condition"],
+        "aspects": aspect_result["resolved"],
+        "missing_required_aspects": aspect_result["missing"],
+        "listing_facts_complete": aspect_result["complete"],
+    }
