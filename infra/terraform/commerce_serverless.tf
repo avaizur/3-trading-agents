@@ -427,3 +427,120 @@ resource "aws_lambda_permission" "commerce_approval_api" {
 output "commerce_approval_url" {
   value = "${aws_apigatewayv2_api.commerce_approval.api_endpoint}/review"
 }
+
+# ------------------------------------------------------------------
+# Supplier catalogue ingestion
+# ------------------------------------------------------------------
+
+data "aws_caller_identity" "commerce_current" {}
+
+resource "aws_s3_bucket" "commerce_supplier_catalog" {
+  bucket = "${var.project_name}-commerce-catalog-${data.aws_caller_identity.commerce_current.account_id}"
+
+  tags = {
+    Project = var.project_name
+    Purpose = "commerce-supplier-catalog"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "commerce_supplier_catalog" {
+  bucket = aws_s3_bucket.commerce_supplier_catalog.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "commerce_supplier_catalog" {
+  bucket = aws_s3_bucket.commerce_supplier_catalog.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "commerce_supplier_catalog_read" {
+  name = "${var.project_name}-commerce-supplier-catalog-read"
+  role = aws_iam_role.commerce_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:GetObject"
+      ]
+      Resource = "${aws_s3_bucket.commerce_supplier_catalog.arn}/incoming/*"
+    }]
+  })
+}
+
+resource "aws_lambda_function" "commerce_supplier_ingest" {
+  function_name = "${var.project_name}-commerce-supplier-ingest"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-supplier-ingest.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-supplier-ingest.zip")
+
+  timeout     = 30
+  memory_size = 256
+
+  environment {
+    variables = {
+      COMMERCE_TABLE_NAME = aws_dynamodb_table.commerce.name
+      SUPPLIER_NAME       = "Go Dropship"
+      PRODUCT_LANE        = "EVERGREEN"
+      SKU_COLUMN          = "sku"
+      TITLE_COLUMN        = "title"
+      COST_COLUMN         = "cost"
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic,
+    aws_iam_role_policy.commerce_dynamodb,
+    aws_iam_role_policy.commerce_supplier_catalog_read
+  ]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "commerce-supplier-ingest"
+  }
+}
+
+resource "aws_lambda_permission" "allow_supplier_catalog_s3" {
+  statement_id  = "AllowSupplierCatalogS3"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.commerce_supplier_ingest.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.commerce_supplier_catalog.arn
+}
+
+resource "aws_s3_bucket_notification" "commerce_supplier_catalog" {
+  bucket = aws_s3_bucket.commerce_supplier_catalog.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.commerce_supplier_ingest.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "incoming/"
+    filter_suffix       = ".csv"
+  }
+
+  depends_on = [
+    aws_lambda_permission.allow_supplier_catalog_s3
+  ]
+}
+
+output "commerce_supplier_catalog_bucket" {
+  value = aws_s3_bucket.commerce_supplier_catalog.bucket
+}
+
+output "commerce_supplier_ingest_lambda_name" {
+  value = aws_lambda_function.commerce_supplier_ingest.function_name
+}
