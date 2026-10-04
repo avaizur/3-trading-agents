@@ -245,11 +245,10 @@ def resolve_required_aspects(
     supplier_html: str,
     taxonomy_aspects: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Resolve only required eBay aspects supported by supplier evidence."""
+    """Resolve required aspects only when supplier evidence is unambiguous."""
 
-    source_text = _normalized(
-        title + " " + _plain_supplier_text(supplier_html)
-    )
+    normalized_title = _normalized(title)
+    supplier_text = _plain_supplier_text(supplier_html)
 
     resolved: dict[str, list[str]] = {}
     missing: list[str] = []
@@ -273,22 +272,54 @@ def resolve_required_aspects(
             if item.get("localizedValue")
         ]
 
-        match = None
+        # Brand must have explicit labelled supplier evidence.
+        # Never infer a brand merely because its name appears somewhere
+        # in navigation, marketing text, or unrelated page content.
+        if name.casefold() == "brand":
+            brand_match = re.search(
+                r"\bbrand\s*[:\-]\s*([^|,;]+)",
+                supplier_text,
+                flags=re.I,
+            )
 
-        for value in values:
-            normalized_value = _normalized(value)
+            if brand_match:
+                labelled_brand = _normalized(
+                    brand_match.group(1)
+                )
 
-            if not normalized_value:
-                continue
+                matching_values = [
+                    value
+                    for value in values
+                    if _normalized(value) == labelled_brand
+                ]
 
-            if normalized_value in source_text:
-                match = value
-                break
+                if len(matching_values) == 1:
+                    resolved[name] = [matching_values[0]]
+                    continue
 
-        if match is not None:
-            resolved[name] = [match]
-        else:
             missing.append(name)
+            continue
+
+        # Prefer the most-specific exact allowed value appearing in title.
+        title_matches = [
+            value
+            for value in values
+            if _normalized(value)
+            and re.search(
+                rf"\b{re.escape(_normalized(value))}\b",
+                normalized_title,
+            )
+        ]
+
+        if title_matches:
+            title_matches.sort(
+                key=lambda value: len(_normalized(value)),
+                reverse=True,
+            )
+            resolved[name] = [title_matches[0]]
+            continue
+
+        missing.append(name)
 
     return {
         "resolved": resolved,
