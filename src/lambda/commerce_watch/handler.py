@@ -23,6 +23,9 @@ Safety:
 from __future__ import annotations
 
 import os
+import json
+
+import boto3
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -303,6 +306,57 @@ def lambda_handler(event, context):
                     ).get(
                         sku=product.supplier_sku,
                     )
+
+                    # If verified listing facts do not exist yet, ask the
+                    # dedicated listing-facts Lambda to build them. It may
+                    # safely refuse when required eBay facts cannot be
+                    # evidenced from the supplier.
+                    listing_facts_function = os.getenv(
+                        "LISTING_FACTS_FUNCTION_NAME"
+                    )
+
+                    if not listing_facts and listing_facts_function:
+                        try:
+                            lambda_client = boto3.client(
+                                "lambda",
+                                region_name=aws_region,
+                            )
+
+                            build_response = lambda_client.invoke(
+                                FunctionName=listing_facts_function,
+                                InvocationType="RequestResponse",
+                                Payload=json.dumps(
+                                    {
+                                        "supplier_name": product.supplier_name,
+                                        "supplier_sku": product.supplier_sku,
+                                    }
+                                ).encode("utf-8"),
+                            )
+
+                            build_result = json.loads(
+                                build_response["Payload"].read()
+                                or b"{}"
+                            )
+
+                            pipeline_evidence[
+                                "listing_facts_build_status"
+                            ] = build_result.get("status")
+
+                            if build_result.get("status") == "LISTING_FACTS_READY":
+                                listing_facts = ListingFactsStore(
+                                    table_name=table_name,
+                                    region_name=aws_region,
+                                ).get(
+                                    sku=product.supplier_sku,
+                                )
+
+                        except Exception as facts_exc:
+                            pipeline_evidence[
+                                "listing_facts_build_status"
+                            ] = "ERROR"
+                            pipeline_evidence[
+                                "listing_facts_build_error"
+                            ] = str(facts_exc)
 
                     if not listing_facts:
                         pipeline_evidence[
