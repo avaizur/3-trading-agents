@@ -375,6 +375,11 @@ def lambda_handler(event, context):
             }
         )
 
+    human_approval_required = any(
+        decision.get("pipeline", {}).get("human_approval_required") is True
+        for decision in decisions
+    )
+
     summary = {
         "watch_run_id": watch_run_id,
         "started_at": now.isoformat(),
@@ -389,7 +394,7 @@ def lambda_handler(event, context):
             "repriced": False,
             "ordered": False,
         },
-        "human_approval_required": True,
+        "human_approval_required": human_approval_required,
     }
 
     store.table.put_item(
