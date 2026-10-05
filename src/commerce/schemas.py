@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, model_validator
 class Platform(str, Enum):
     EBAY = "EBAY"
     AMAZON = "AMAZON"
+    TIKTOK_SHOP = "TIKTOK_SHOP"
+    ETSY = "ETSY"
 
 
 class PlatformStatus(str, Enum):

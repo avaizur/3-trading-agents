@@ -1,7 +1,4 @@
-from src.commerce.adapters.marketplace_base import (
-    BaseMarketplaceAdapter,
-    PlatformDisabledError,
-)
+from src.commerce.adapters.marketplace_base import BaseMarketplaceAdapter
 from src.commerce.schemas import (
     Listing,
     Platform,
@@ -10,16 +7,16 @@ from src.commerce.schemas import (
 )
 
 
-class AmazonAdapter(BaseMarketplaceAdapter):
+class TikTokShopAdapter(BaseMarketplaceAdapter):
     """
-    Amazon SP-API onboarding adapter.
+    TikTok Shop onboarding adapter.
 
-    Present in the architecture but disabled until seller authorization,
-    credentials, taxonomy and listing validation are configured.
+    Disabled until the Avaiizur TikTok Shop authorizes our own application
+    and its credentials are stored securely in AWS.
     """
 
     def __init__(self):
-        self.platform = Platform.AMAZON
+        self.platform = Platform.TIKTOK_SHOP
         self.status = PlatformStatus.ON_HOLD
         self.is_enabled = False
 
@@ -31,21 +28,18 @@ class AmazonAdapter(BaseMarketplaceAdapter):
         self._require_enabled()
         self.require_human_approval(listing)
         raise NotImplementedError(
-            "Amazon SP-API publication is not configured yet."
+            "TikTok Shop API publication is not configured yet."
         )
 
     def estimate_fees(self, sale_price: float) -> float:
         self._require_enabled()
         raise NotImplementedError(
-            "Amazon fee calculation requires marketplace/category configuration."
+            "TikTok Shop fees require live marketplace configuration."
         )
 
     def test_connection(self) -> dict:
         result = super().test_connection()
         result["message"] = (
-            "Amazon adapter ready for future SP-API onboarding."
+            "TikTok Shop adapter ready for seller-app authorization."
         )
         return result
-
-
-__all__ = ["AmazonAdapter", "PlatformDisabledError"]
