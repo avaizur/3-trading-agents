@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-MIN_MARGIN_PCT = 20.0
+MIN_MARGIN_PCT = 0.20
 
 
 @dataclass(frozen=True)
@@ -50,8 +50,8 @@ def evaluate_replenishment(
             should_replenish=False,
             target_quantity=0,
             reason=(
-                f"Expected margin {expected_margin_pct:.2f}% "
-                f"is below the {min_margin_pct:.2f}% minimum."
+                f"Expected margin {expected_margin_pct:.2%} "
+                f"is below the {min_margin_pct:.2%} minimum."
             ),
         )
 
@@ -60,6 +60,6 @@ def evaluate_replenishment(
         target_quantity=1,
         reason=(
             "Supplier stock is available and current marketplace "
-            f"margin is {expected_margin_pct:.2f}%."
+            f"margin is {expected_margin_pct:.2%}."
         ),
     )

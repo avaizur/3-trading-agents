@@ -4,7 +4,7 @@ from src.commerce.replenishment import evaluate_replenishment
 def test_replenishment_allowed_when_stock_and_margin_are_safe():
     decision = evaluate_replenishment(
         supplier_stock=12,
-        expected_margin_pct=23.5,
+        expected_margin_pct=0.235,
         market_validated=True,
     )
 
@@ -15,7 +15,7 @@ def test_replenishment_allowed_when_stock_and_margin_are_safe():
 def test_replenishment_blocked_when_supplier_out_of_stock():
     decision = evaluate_replenishment(
         supplier_stock=0,
-        expected_margin_pct=30.0,
+        expected_margin_pct=0.30,
         market_validated=True,
     )
 
@@ -26,7 +26,7 @@ def test_replenishment_blocked_when_supplier_out_of_stock():
 def test_replenishment_blocked_below_twenty_percent_margin():
     decision = evaluate_replenishment(
         supplier_stock=10,
-        expected_margin_pct=19.99,
+        expected_margin_pct=0.1999,
         market_validated=True,
     )
 
@@ -37,7 +37,7 @@ def test_replenishment_blocked_below_twenty_percent_margin():
 def test_replenishment_blocked_without_current_market_validation():
     decision = evaluate_replenishment(
         supplier_stock=10,
-        expected_margin_pct=25.0,
+        expected_margin_pct=0.25,
         market_validated=False,
     )
 
