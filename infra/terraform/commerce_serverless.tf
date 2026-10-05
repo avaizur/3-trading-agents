@@ -123,13 +123,15 @@ resource "aws_lambda_function" "commerce_watch" {
   filename         = "${path.module}/../../build/commerce-watch.zip"
   source_code_hash = filebase64sha256("${path.module}/../../build/commerce-watch.zip")
 
-  timeout     = 30
+  timeout     = 120
   memory_size = 256
 
   environment {
     variables = {
-      COMMERCE_TABLE_NAME = aws_dynamodb_table.commerce.name
-      APPROVAL_BASE_URL   = "${aws_apigatewayv2_api.commerce_approval.api_endpoint}/review"
+      COMMERCE_TABLE_NAME         = aws_dynamodb_table.commerce.name
+      APPROVAL_BASE_URL           = "${aws_apigatewayv2_api.commerce_approval.api_endpoint}/review"
+      LISTING_FACTS_FUNCTION_NAME = aws_lambda_function.commerce_listing_facts.function_name
+      EBAY_SECRET_ID              = "3-trading-agents/ebay-production"
     }
   }
 
@@ -182,7 +184,11 @@ resource "aws_iam_role_policy" "commerce_step_functions_lambda" {
       Action = [
         "lambda:InvokeFunction"
       ]
-      Resource = aws_lambda_function.commerce_watch.arn
+      Resource = [
+        "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-supplier-discovery",
+        "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-watch",
+        "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-replenishment"
+      ]
     }]
   })
 }
@@ -192,21 +198,60 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
   role_arn = aws_iam_role.commerce_step_functions.arn
 
   definition = jsonencode({
-    Comment = "Daily Commerce Watch V1"
-    StartAt = "RunCommerceWatch"
+    Comment = "Daily Commerce Watch V2"
+    StartAt = "DiscoverSupplierProducts"
+
     States = {
-      RunCommerceWatch = {
+      DiscoverSupplierProducts = {
         Type     = "Task"
         Resource = "arn:aws:states:::lambda:invoke"
 
         Parameters = {
-          FunctionName = aws_lambda_function.commerce_watch.arn
+          FunctionName = "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-supplier-discovery"
           Payload = {
             "trigger" = "daily"
           }
         }
 
-        OutputPath = "$.Payload"
+        ResultPath = "$.discovery"
+        Next       = "RunCommerceWatch"
+      }
+
+      RunCommerceWatch = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+
+        Parameters = {
+          FunctionName = "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-watch"
+          Payload = {
+            "trigger" = "daily"
+          }
+        }
+
+        ResultSelector = {
+          "watch.$" = "$.Payload"
+        }
+
+        ResultPath = "$.watch"
+        Next       = "RunReplenishment"
+      }
+
+      RunReplenishment = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+
+        Parameters = {
+          FunctionName = "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-replenishment"
+          Payload = {
+            "trigger" = "daily"
+          }
+        }
+
+        ResultSelector = {
+          "replenishment.$" = "$.Payload"
+        }
+
+        ResultPath = "$.replenishment"
         Next       = "SendDailySummary"
       }
 
@@ -217,7 +262,7 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
         Parameters = {
           TopicArn    = aws_sns_topic.commerce_daily_watch.arn
           Subject     = "3 Trading Agents - Daily Commerce Watch"
-          "Message.$" = "States.Format('Daily Commerce Watch completed.\n\nProducts monitored: {}\nWatch status counts: {}\nSupplier counts: {}\nHuman approval required: {}\n\nProducts and approval links:\n{}\n\nNo automatic publishing, repricing or ordering was performed.', $.product_count, States.JsonToString($.watch_counts), States.JsonToString($.supplier_counts), $.human_approval_required, States.JsonToString($.decisions))"
+          "Message.$" = "States.JsonToString($)"
         }
 
         End = true
@@ -582,4 +627,121 @@ resource "aws_lambda_function" "commerce_supplier_discovery" {
 
 output "commerce_supplier_discovery_lambda_name" {
   value = aws_lambda_function.commerce_supplier_discovery.function_name
+}
+
+
+# ------------------------------------------------------------------
+# Verified eBay listing facts
+# ------------------------------------------------------------------
+
+resource "aws_lambda_function" "commerce_listing_facts" {
+  function_name = "${var.project_name}-commerce-listing-facts"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-listing-facts.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-listing-facts.zip")
+
+  timeout     = 120
+  memory_size = 256
+
+  environment {
+    variables = {
+      COMMERCE_TABLE_NAME = aws_dynamodb_table.commerce.name
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic,
+    aws_iam_role_policy.commerce_dynamodb
+  ]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "verified-listing-facts"
+  }
+}
+
+output "commerce_listing_facts_lambda_name" {
+  value = aws_lambda_function.commerce_listing_facts.function_name
+}
+
+
+# ------------------------------------------------------------------
+# Live eBay replenishment
+# ------------------------------------------------------------------
+
+resource "aws_lambda_function" "commerce_replenishment" {
+  function_name = "${var.project_name}-commerce-replenishment"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-replenishment.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-replenishment.zip")
+
+  timeout     = 120
+  memory_size = 256
+
+  environment {
+    variables = {
+      COMMERCE_TABLE_NAME = aws_dynamodb_table.commerce.name
+      EBAY_SECRET_ID      = "3-trading-agents/ebay-production"
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic,
+    aws_iam_role_policy.commerce_dynamodb,
+    aws_iam_role_policy.commerce_ebay_secret
+  ]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "safe-live-replenishment"
+  }
+}
+
+output "commerce_replenishment_lambda_name" {
+  value = aws_lambda_function.commerce_replenishment.function_name
+}
+
+
+# ------------------------------------------------------------------
+# Narrow Lambda permissions for eBay secret + listing-facts invocation
+# ------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "commerce_ebay_secret" {
+  name = "${var.project_name}-commerce-ebay-secret"
+  role = aws_iam_role.commerce_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue"
+      ]
+      Resource = "arn:aws:secretsmanager:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:secret:3-trading-agents/ebay-production*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "commerce_listing_facts_invoke" {
+  name = "${var.project_name}-commerce-listing-facts-invoke"
+  role = aws_iam_role.commerce_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "lambda:InvokeFunction"
+      ]
+      Resource = aws_lambda_function.commerce_listing_facts.arn
+    }]
+  })
 }
