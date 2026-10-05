@@ -79,6 +79,9 @@ def _record_result(
 
 
 def lambda_handler(event, context):
+    event = event or {}
+    dry_run = bool(event.get("dry_run", False))
+
     table_name = os.environ["COMMERCE_TABLE_NAME"]
     region = os.environ.get("AWS_REGION", "eu-west-2")
     secret_id = os.environ.get(
@@ -293,16 +296,25 @@ def lambda_handler(event, context):
                     region=region,
                 )
 
-            update_live_quantity(
-                sku=sku,
-                offer_id=offer_id,
-                quantity=1,
-                token=ebay_token,
-            )
+            if dry_run:
+                result["status"] = "DRY_RUN_REPLENISH"
+                result["replenished"] = False
+                result["target_quantity"] = 1
+                result["reason"] = (
+                    decision.reason
+                    + " Dry run only; eBay quantity was not changed."
+                )
+            else:
+                update_live_quantity(
+                    sku=sku,
+                    offer_id=offer_id,
+                    quantity=1,
+                    token=ebay_token,
+                )
 
-            result["status"] = "REPLENISHED"
-            result["replenished"] = True
-            result["target_quantity"] = 1
+                result["status"] = "REPLENISHED"
+                result["replenished"] = True
+                result["target_quantity"] = 1
 
         except Exception as exc:
             result["status"] = "ERROR"
@@ -323,4 +335,5 @@ def lambda_handler(event, context):
         "checked": len(live_listings),
         "results": results,
         "supplier_ordering_performed": False,
+        "dry_run": dry_run,
     }
