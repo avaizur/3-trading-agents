@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from html.parser import HTMLParser
 import json
 import re
 import urllib.parse
@@ -164,22 +165,49 @@ def required_aspect_names(
 
 def extract_supplier_images(
     document: str,
+    *,
+    product_title: str,
 ) -> list[str]:
-    urls = re.findall(
-        r'https?://[^"\']+\.(?:jpg|jpeg|png|webp)',
-        html.unescape(document),
-        flags=re.I,
-    )
+    """Return only Go Dropship images belonging to this product gallery."""
 
-    result = []
-    seen = set()
+    expected_alt = _normalized(product_title)
 
-    for url in urls:
-        url = url.strip()
+    class ProductImageParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.images: list[str] = []
 
-        if "godropship" not in url.casefold():
-            continue
+        def handle_starttag(self, tag, attrs):
+            if tag.casefold() != "img":
+                return
 
+            values = dict(attrs)
+            src = str(values.get("src") or "").strip()
+            alt = str(values.get("alt") or "").strip()
+
+            if not src:
+                return
+
+            src_lower = src.casefold()
+
+            if "godropship.co.uk/uploadfile/" not in src_lower:
+                return
+
+            if "/thumbnail_" in src_lower or "thumbnail_" in src_lower:
+                return
+
+            if _normalized(alt) != expected_alt:
+                return
+
+            self.images.append(src)
+
+    parser = ProductImageParser()
+    parser.feed(html.unescape(document))
+
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for url in parser.images:
         if url in seen:
             continue
 
@@ -213,7 +241,8 @@ def build_listing_metadata(
     )
 
     images = extract_supplier_images(
-        supplier_html
+        supplier_html,
+        product_title=title,
     )
 
     return {
