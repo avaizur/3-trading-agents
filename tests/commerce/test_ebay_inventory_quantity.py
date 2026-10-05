@@ -55,3 +55,24 @@ def test_update_live_quantity_rejects_negative_quantity():
             quantity=-1,
             token="TEST-TOKEN",
         )
+
+
+def test_get_inventory_quantity(monkeypatch):
+    def fake_request(method, path, token, payload=None):
+        assert method == "GET"
+        assert path == "/inventory_item/SKU-1"
+
+        return {
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": 0,
+                }
+            }
+        }
+
+    monkeypatch.setattr(service, "_request", fake_request)
+
+    assert service.get_inventory_quantity(
+        sku="SKU-1",
+        token="TEST",
+    ) == 0

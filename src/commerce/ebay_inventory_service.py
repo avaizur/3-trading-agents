@@ -419,3 +419,32 @@ def update_live_quantity(
         "quantity": quantity,
         "updated": True,
     }
+
+
+def get_inventory_quantity(
+    *,
+    sku: str,
+    token: str,
+) -> int:
+    """Read the current eBay inventory quantity for a SKU."""
+
+    if not sku.strip():
+        raise ValueError("SKU is required.")
+
+    sku_path = urllib.parse.quote(sku, safe="")
+
+    result = _request(
+        "GET",
+        f"/inventory_item/{sku_path}",
+        token,
+    )
+
+    availability = (
+        result
+        .get("availability", {})
+        .get("shipToLocationAvailability", {})
+    )
+
+    return int(
+        availability.get("quantity", 0)
+    )
