@@ -59,7 +59,7 @@ def test_replenishment_refreshes_supplier_cost_and_stock(monkeypatch):
             saved_products.append(item)
 
     class FakeSupplierAdapter:
-        def get_product(self, sku):
+        def refresh_product(self, sku):
             return SimpleNamespace(
                 cost=6.50,
                 inventory_count=8,
@@ -74,7 +74,7 @@ def test_replenishment_refreshes_supplier_cost_and_stock(monkeypatch):
     monkeypatch.setattr(
         handler,
         "get_supplier_adapter",
-        lambda name: FakeSupplierAdapter(),
+        lambda name, store=None: FakeSupplierAdapter(),
     )
     monkeypatch.setattr(
         handler,

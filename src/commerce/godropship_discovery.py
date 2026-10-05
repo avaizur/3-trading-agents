@@ -158,6 +158,90 @@ def _product_links(document: str) -> list[str]:
     return result
 
 
+
+def parse_product_snapshot(
+    url: str,
+    document: str,
+) -> DiscoveredSupplierProduct | None:
+    """
+    Parse the current supplier facts from one Go Dropship product page.
+
+    Unlike discovery, this does not apply product-selection filters such as
+    minimum stock, preferred cost range, or excluded discovery categories.
+    It is intended for refreshing an already-known supplier product.
+    """
+    text = _plain_text(document)
+
+    sku_match = re.search(
+        r"Item\s*Code\s*:\s*([A-Za-z0-9_-]+)",
+        text,
+        re.I,
+    )
+
+    stock_match = re.search(
+        r"UK\s*Stock\s*:\s*(\d+)",
+        text,
+        re.I,
+    )
+
+    price_match = re.search(
+        r"Price\s*:\s*£\s*([0-9]+(?:\.[0-9]{1,2})?)",
+        text,
+        re.I,
+    )
+
+    if not (sku_match and stock_match and price_match):
+        return None
+
+    title_match = re.search(
+        r"<h1[^>]*>(.*?)</h1>",
+        document,
+        re.I | re.S,
+    )
+
+    if not title_match:
+        title_match = re.search(
+            r"<h2[^>]*>(.*?)</h2>",
+            document,
+            re.I | re.S,
+        )
+
+    if not title_match:
+        return None
+
+    title = _plain_text(title_match.group(1)).strip()
+    sku = sku_match.group(1).strip()
+    stock = int(stock_match.group(1))
+    cost = float(price_match.group(1))
+
+    title_lower = title.casefold()
+
+    lane = (
+        ProductLane.SEASONAL
+        if any(term in title_lower for term in SEASONAL_TERMS)
+        else ProductLane.EVERGREEN
+    )
+
+    return DiscoveredSupplierProduct(
+        sku=sku,
+        title=title,
+        cost=cost,
+        stock=stock,
+        url=url,
+        lane=lane,
+    )
+
+
+def fetch_product_snapshot(
+    url: str,
+) -> DiscoveredSupplierProduct | None:
+    """Fetch and parse current facts for one known Go Dropship product URL."""
+    return parse_product_snapshot(
+        url,
+        _fetch(url),
+    )
+
+
 def _parse_product_page(url: str, document: str) -> DiscoveredSupplierProduct | None:
     text = _plain_text(document)
 

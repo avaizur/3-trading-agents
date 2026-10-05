@@ -94,9 +94,17 @@ def lambda_handler(event, context):
             continue
 
         try:
-            supplier_adapter = get_supplier_adapter("Go Dropship")
+            supplier_adapter = get_supplier_adapter(
+                "Go Dropship",
+                store=store,
+            )
 
-            fresh_supplier = supplier_adapter.get_product(sku)
+            fresh_supplier = supplier_adapter.refresh_product(sku)
+
+            if fresh_supplier is None:
+                raise ValueError(
+                    "Unable to refresh supplier product."
+                )
 
             product.supplier_cost = fresh_supplier.cost
             product.supplier_stock = fresh_supplier.inventory_count

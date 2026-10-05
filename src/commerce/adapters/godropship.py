@@ -3,6 +3,7 @@ from typing import Optional
 from src.commerce.adapters.supplier_base import BaseSupplierAdapter
 from src.commerce.godropship_discovery import (
     discover_products,
+    fetch_product_snapshot,
     save_new_products,
 )
 from src.commerce.schemas import SupplierProduct, SupplierType
@@ -51,6 +52,45 @@ class GoDropshipAdapter(BaseSupplierAdapter):
             inventory_count=product.supplier_stock,
             allows_reselling=True,
             supplier_url=product.source_url,
+        )
+
+    def refresh_product(self, sku: str) -> Optional[SupplierProduct]:
+        """
+        Fetch current supplier cost and stock for an already-known product.
+        """
+        self._require_store()
+
+        current = self.store.get_supplier_backed_product(
+            self.supplier_name,
+            sku,
+        )
+
+        if current is None or not current.source_url:
+            return None
+
+        snapshot = fetch_product_snapshot(
+            current.source_url,
+        )
+
+        if snapshot is None:
+            return None
+
+        if snapshot.sku.casefold() != sku.casefold():
+            raise ValueError(
+                "Supplier page SKU does not match requested SKU."
+            )
+
+        return SupplierProduct(
+            supplier_id=self.supplier_id,
+            supplier_name=self.supplier_name,
+            sku=snapshot.sku,
+            title=snapshot.title,
+            supplier_type=SupplierType.WHOLESALE,
+            cost=snapshot.cost,
+            shipping_cost=0.0,
+            inventory_count=snapshot.stock,
+            allows_reselling=True,
+            supplier_url=snapshot.url,
         )
 
     def check_inventory(self, sku: str) -> int:
