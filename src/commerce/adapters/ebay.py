@@ -1,5 +1,6 @@
-from typing import Optional, Union
+from typing import Union
 
+from src.commerce.adapters.marketplace_base import BaseMarketplaceAdapter
 from src.commerce.schemas import (
     DraftReviewStatus,
     EBayListingDraft,
@@ -12,10 +13,15 @@ from src.commerce.schemas import (
 )
 
 
-class EBayAdapter:
+class EBayAdapter(BaseMarketplaceAdapter):
     """
-    eBay Adapter: Active first platform.
-    Enforces human-approved listing constraint and offline placeholder operation (no external APIs yet).
+    eBay marketplace adapter.
+
+    This adapter preserves the existing offline/domain behaviour while
+    conforming to the shared marketplace interface.
+
+    Real eBay Inventory API publication remains handled by the production
+    eBay inventory service.
     """
 
     def __init__(self):
@@ -23,62 +29,58 @@ class EBayAdapter:
         self.status = PlatformStatus.ACTIVE
         self.is_enabled = True
 
-    def create_listing(self, draft: Union[SellerListingDraft, EBayListingDraft]) -> Listing:
-        """
-        Creates a platform listing record from a seller draft or eBay listing draft.
-        If draft is not human-approved, listing is marked PENDING_APPROVAL and human_approved=False.
-        """
+    def create_listing(
+        self,
+        draft: Union[SellerListingDraft, EBayListingDraft],
+    ) -> Listing:
+        self._require_enabled()
+
         if isinstance(draft, EBayListingDraft):
-            price = draft.price
-            quantity = draft.quantity
             is_approved = (
                 draft.status == DraftReviewStatus.APPROVED_TO_PUBLISH
                 and draft.reviewed_by is not None
             )
-            approved_by = draft.reviewed_by if is_approved else None
-        else:
-            price = draft.proposed_price
-            quantity = 1
-            is_approved = (
-                draft.approval_status == ListingApprovalStatus.APPROVED
-                and draft.approved_by is not None
-            )
-            approved_by = draft.approved_by if is_approved else None
 
-        if is_approved:
             return Listing(
                 listing_id=f"EBAY-DRAFT-{draft.sku}",
                 platform=Platform.EBAY,
                 sku=draft.sku,
                 title=draft.title,
-                price=price,
-                quantity=quantity,
-                status=ListingStatus.APPROVED,
-                human_approved=True,
-                approved_by=approved_by,
+                price=draft.price,
+                quantity=draft.quantity,
+                status=(
+                    ListingStatus.APPROVED
+                    if is_approved
+                    else ListingStatus.PENDING_APPROVAL
+                ),
+                human_approved=is_approved,
+                approved_by=draft.reviewed_by if is_approved else None,
             )
+
+        is_approved = (
+            draft.approval_status == ListingApprovalStatus.APPROVED
+            and draft.approved_by is not None
+        )
 
         return Listing(
             listing_id=f"EBAY-DRAFT-{draft.sku}",
             platform=Platform.EBAY,
             sku=draft.sku,
             title=draft.title,
-            price=price,
-            quantity=quantity,
-            status=ListingStatus.PENDING_APPROVAL,
-            human_approved=False,
-            approved_by=None,
+            price=draft.proposed_price,
+            quantity=1,
+            status=(
+                ListingStatus.APPROVED
+                if is_approved
+                else ListingStatus.PENDING_APPROVAL
+            ),
+            human_approved=is_approved,
+            approved_by=draft.approved_by if is_approved else None,
         )
 
     def publish_listing(self, listing: Listing) -> dict:
-        """
-        Publishes listing to eBay.
-        Strictly blocks publishing if human approval is missing.
-        """
-        if not listing.human_approved:
-            raise PermissionError(
-                "Human approval is required before publishing any listing to eBay."
-            )
+        self._require_enabled()
+        self.require_human_approval(listing)
 
         listing.status = ListingStatus.ACTIVE
         listing.listing_id = f"EBAY-{listing.sku}"
@@ -87,7 +89,11 @@ class EBayAdapter:
             "listing_id": listing.listing_id,
             "platform": Platform.EBAY.value,
             "status": ListingStatus.ACTIVE.value,
-            "message": "Listing published successfully (placeholder mode: no external APIs invoked)",
+            "message": (
+                "Listing approved in adapter domain layer. "
+                "Production API publication is handled by the "
+                "eBay inventory service."
+            ),
         }
 
     def estimate_fees(
@@ -96,20 +102,19 @@ class EBayAdapter:
         final_value_rate: float = 0.1325,
         per_order_fee: float = 0.30,
     ) -> float:
-        """
-        Deterministic fee estimator for standard eBay categories:
-        Final value fee ~13.25% + $0.30 fixed per-order fee.
-        """
         if sale_price <= 0:
             return 0.0
-        return round((sale_price * final_value_rate) + per_order_fee, 2)
+
+        return round(
+            (sale_price * final_value_rate) + per_order_fee,
+            2,
+        )
 
     def test_connection(self) -> dict:
-        """Adapter status report."""
-        return {
-            "platform": self.platform.value,
-            "status": self.status.value,
-            "is_enabled": self.is_enabled,
-            "mode": "offline_placeholder",
-            "message": "eBay active first platform placeholder (no external APIs yet)",
-        }
+        result = super().test_connection()
+        result["mode"] = "production_capable"
+        result["message"] = (
+            "eBay adapter active. Real API operations are handled "
+            "by dedicated eBay production services."
+        )
+        return result

@@ -69,3 +69,12 @@ def test_go_dropship_supplier_registry():
 def test_unknown_supplier_is_rejected():
     with pytest.raises(KeyError):
         get_supplier_adapter("Unknown Warehouse")
+
+
+def test_ebay_uses_common_marketplace_interface():
+    from src.commerce.adapters.marketplace_base import BaseMarketplaceAdapter
+
+    adapter = get_marketplace_adapter(Platform.EBAY)
+
+    assert isinstance(adapter, BaseMarketplaceAdapter)
+    assert adapter.is_enabled is True
