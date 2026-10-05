@@ -349,3 +349,73 @@ def publish_offer(
         "warnings": result.get("warnings", []),
         "published": True,
     }
+
+
+def update_live_quantity(
+    *,
+    sku: str,
+    offer_id: str,
+    quantity: int,
+    token: str,
+) -> dict[str, Any]:
+    """
+    Update quantity for an existing live eBay Inventory API listing.
+
+    Uses bulkUpdatePriceQuantity so the live listing can be replenished
+    without recreating or republishing the offer.
+    """
+
+    if not sku.strip():
+        raise ValueError("SKU is required.")
+
+    if not offer_id.strip():
+        raise ValueError("Offer ID is required.")
+
+    if quantity < 0:
+        raise ValueError("Quantity cannot be negative.")
+
+    payload = {
+        "requests": [
+            {
+                "sku": sku,
+                "shipToLocationAvailability": {
+                    "quantity": quantity,
+                },
+                "offers": [
+                    {
+                        "offerId": offer_id,
+                        "availableQuantity": quantity,
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = _request(
+        "POST",
+        "/bulk_update_price_quantity",
+        token,
+        payload,
+    )
+
+    responses = result.get("responses", [])
+
+    if not responses:
+        raise EBayInventoryError(
+            "eBay quantity update returned no response record."
+        )
+
+    response = responses[0]
+    status_code = int(response.get("statusCode", 0))
+
+    if status_code < 200 or status_code >= 300:
+        raise EBayInventoryError(
+            f"eBay quantity update failed with status {status_code}."
+        )
+
+    return {
+        "sku": sku,
+        "offer_id": offer_id,
+        "quantity": quantity,
+        "updated": True,
+    }
