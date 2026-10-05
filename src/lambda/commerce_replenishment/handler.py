@@ -38,6 +38,46 @@ def _to_dynamo(value):
     return value
 
 
+
+def _record_result(
+    *,
+    store,
+    live: dict,
+    result: dict,
+    results: list,
+) -> None:
+    """Append the outcome and persist it against the LIVE listing."""
+    results.append(result)
+
+    pk = live.get("PK")
+
+    if not pk:
+        sku = str(result.get("sku", ""))
+        if not sku:
+            return
+        pk = f"LIVE_LISTING#EBAY#{sku}"
+
+    store.table.update_item(
+        Key={
+            "PK": pk,
+            "SK": str(live.get("SK", "META")),
+        },
+        UpdateExpression=(
+            "SET replenishment_status = :status, "
+            "replenishment_reason = :reason, "
+            "replenishment_checked_at = :checked_at"
+        ),
+        ExpressionAttributeValues=_to_dynamo(
+            {
+                ":status": result.get("status", "UNKNOWN"),
+                ":reason": result.get("reason", ""),
+                ":checked_at": result["checked_at"],
+            }
+        ),
+    )
+
+
+
 def lambda_handler(event, context):
     table_name = os.environ["COMMERCE_TABLE_NAME"]
     region = os.environ.get("AWS_REGION", "eu-west-2")
@@ -79,7 +119,12 @@ def lambda_handler(event, context):
         if not sku or not offer_id:
             result["status"] = "BLOCKED"
             result["reason"] = "LIVE listing is missing SKU or offer ID."
-            results.append(result)
+            _record_result(
+                store=store,
+                live=live,
+                result=result,
+                results=results,
+            )
             continue
 
         product = store.get_supplier_backed_product(
@@ -90,7 +135,12 @@ def lambda_handler(event, context):
         if product is None:
             result["status"] = "BLOCKED"
             result["reason"] = "Supplier product was not found."
-            results.append(result)
+            _record_result(
+                store=store,
+                live=live,
+                result=result,
+                results=results,
+            )
             continue
 
         try:
@@ -123,13 +173,23 @@ def lambda_handler(event, context):
                 "Fresh supplier check failed: "
                 f"{type(exc).__name__}"
             )
-            results.append(result)
+            _record_result(
+                store=store,
+                live=live,
+                result=result,
+                results=results,
+            )
             continue
 
         if product.supplier_stock is None or product.supplier_stock <= 0:
             result["status"] = "BLOCKED"
             result["reason"] = "Supplier stock is unavailable."
-            results.append(result)
+            _record_result(
+                store=store,
+                live=live,
+                result=result,
+                results=results,
+            )
             continue
 
         try:
@@ -151,7 +211,12 @@ def lambda_handler(event, context):
                 result["reason"] = (
                     "Live eBay listing still has available quantity."
                 )
-                results.append(result)
+                _record_result(
+                    store=store,
+                    live=live,
+                    result=result,
+                    results=results,
+                )
                 continue
 
         except Exception as exc:
@@ -160,7 +225,12 @@ def lambda_handler(event, context):
                 "Unable to read current eBay quantity: "
                 f"{type(exc).__name__}"
             )
-            results.append(result)
+            _record_result(
+                store=store,
+                live=live,
+                result=result,
+                results=results,
+            )
             continue
 
         try:
@@ -184,7 +254,12 @@ def lambda_handler(event, context):
                 "Market refresh failed: "
                 f"{type(exc).__name__}"
             )
-            results.append(result)
+            _record_result(
+                store=store,
+                live=live,
+                result=result,
+                results=results,
+            )
             continue
 
         decision = evaluate_replenishment(
@@ -203,7 +278,12 @@ def lambda_handler(event, context):
 
         if not decision.should_replenish:
             result["status"] = "BLOCKED"
-            results.append(result)
+            _record_result(
+                store=store,
+                live=live,
+                result=result,
+                results=results,
+            )
             continue
 
         try:
@@ -231,25 +311,11 @@ def lambda_handler(event, context):
                 f"{type(exc).__name__}"
             )
 
-        results.append(result)
-
-        store.table.update_item(
-            Key={
-                "PK": f"LIVE_LISTING#EBAY#{sku}",
-                "SK": "META",
-            },
-            UpdateExpression=(
-                "SET replenishment_status = :status, "
-                "replenishment_reason = :reason, "
-                "replenishment_checked_at = :checked_at"
-            ),
-            ExpressionAttributeValues=_to_dynamo(
-                {
-                    ":status": result["status"],
-                    ":reason": result["reason"],
-                    ":checked_at": result["checked_at"],
-                }
-            ),
+        _record_result(
+            store=store,
+            live=live,
+            result=result,
+            results=results,
         )
 
     return {
