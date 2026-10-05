@@ -18,6 +18,7 @@ Safety:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html
@@ -271,13 +272,18 @@ def _transition_approval(
 
 
 def _parse_form(event: dict) -> dict[str, str]:
+    body = event.get("body") or ""
+
     if event.get("isBase64Encoded"):
-        raise ValueError(
-            "Base64 request body is not supported."
-        )
+        try:
+            body = base64.b64decode(body).decode("utf-8")
+        except Exception as exc:
+            raise ValueError(
+                "Invalid encoded request body."
+            ) from exc
 
     parsed = parse_qs(
-        event.get("body") or "",
+        body,
         keep_blank_values=True,
     )
 
