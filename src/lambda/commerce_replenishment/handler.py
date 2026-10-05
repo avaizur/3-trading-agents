@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from src.commerce.dynamo_storage import DynamoCommerceStore
+from src.commerce.adapters.registry import get_supplier_adapter
 from src.commerce.ebay_inventory_service import (
     get_inventory_quantity,
     load_access_token,
@@ -89,6 +90,31 @@ def lambda_handler(event, context):
         if product is None:
             result["status"] = "BLOCKED"
             result["reason"] = "Supplier product was not found."
+            results.append(result)
+            continue
+
+        try:
+            supplier_adapter = get_supplier_adapter("Go Dropship")
+
+            fresh_supplier = supplier_adapter.get_product(sku)
+
+            product.supplier_cost = fresh_supplier.cost
+            product.supplier_stock = fresh_supplier.inventory_count
+
+            if fresh_supplier.supplier_url:
+                product.source_url = fresh_supplier.supplier_url
+
+            store.save_supplier_backed_product(product)
+
+            result["supplier_cost"] = product.supplier_cost
+            result["supplier_stock"] = product.supplier_stock
+
+        except Exception as exc:
+            result["status"] = "BLOCKED"
+            result["reason"] = (
+                "Fresh supplier check failed: "
+                f"{type(exc).__name__}"
+            )
             results.append(result)
             continue
 
