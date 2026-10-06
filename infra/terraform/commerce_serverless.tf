@@ -187,7 +187,8 @@ resource "aws_iam_role_policy" "commerce_step_functions_lambda" {
       Resource = [
         "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-supplier-discovery",
         "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-watch",
-        "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-replenishment"
+        "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-replenishment",
+        "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-daily-summary"
       ]
     }]
   })
@@ -252,6 +253,23 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
         }
 
         ResultPath = "$.replenishment"
+        Next       = "FormatDailySummary"
+      }
+
+      FormatDailySummary = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+
+        Parameters = {
+          FunctionName = "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-daily-summary"
+          "Payload.$"  = "$"
+        }
+
+        ResultSelector = {
+          "summary.$" = "$.Payload"
+        }
+
+        ResultPath = "$.summary"
         Next       = "SendDailySummary"
       }
 
@@ -260,9 +278,9 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
         Resource = "arn:aws:states:::sns:publish"
 
         Parameters = {
-          TopicArn    = aws_sns_topic.commerce_daily_watch.arn
-          Subject     = "3 Trading Agents - Daily Commerce Watch"
-          "Message.$" = "States.JsonToString($)"
+          TopicArn     = aws_sns_topic.commerce_daily_watch.arn
+          "Subject.$"  = "$.summary.summary.subject"
+          "Message.$"  = "$.summary.summary.message"
         }
 
         End = true
@@ -666,6 +684,38 @@ resource "aws_lambda_function" "commerce_listing_facts" {
 
 output "commerce_listing_facts_lambda_name" {
   value = aws_lambda_function.commerce_listing_facts.function_name
+}
+
+
+# ------------------------------------------------------------------
+# Human-readable daily commerce summary
+# ------------------------------------------------------------------
+
+resource "aws_lambda_function" "commerce_daily_summary" {
+  function_name = "${var.project_name}-commerce-daily-summary"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-daily-summary.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-daily-summary.zip")
+
+  timeout     = 30
+  memory_size = 128
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic
+  ]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "human-readable-daily-commerce-summary"
+  }
+}
+
+output "commerce_daily_summary_lambda_name" {
+  value = aws_lambda_function.commerce_daily_summary.function_name
 }
 
 
