@@ -278,9 +278,9 @@ resource "aws_sfn_state_machine" "commerce_daily_watch" {
         Resource = "arn:aws:states:::sns:publish"
 
         Parameters = {
-          TopicArn     = aws_sns_topic.commerce_daily_watch.arn
-          "Subject.$"  = "$.summary.summary.subject"
-          "Message.$"  = "$.summary.summary.message"
+          TopicArn    = aws_sns_topic.commerce_daily_watch.arn
+          "Subject.$" = "$.summary.summary.subject"
+          "Message.$" = "$.summary.summary.message"
         }
 
         End = true
@@ -794,4 +794,101 @@ resource "aws_iam_role_policy" "commerce_listing_facts_invoke" {
       Resource = aws_lambda_function.commerce_listing_facts.arn
     }]
   })
+}
+
+
+# ------------------------------------------------------------------
+# eBay sold-order monitor
+# ------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "commerce_order_monitor_actions" {
+  name = "${var.project_name}-commerce-order-monitor-actions"
+  role = aws_iam_role.commerce_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "sns:Publish"
+        ]
+        Resource = "arn:aws:sns:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:${var.project_name}-commerce-daily-watch"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = "arn:aws:lambda:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:function:${var.project_name}-commerce-replenishment"
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "commerce_order_monitor" {
+  function_name = "${var.project_name}-commerce-order-monitor"
+
+  role    = aws_iam_role.commerce_lambda.arn
+  handler = "handler.lambda_handler"
+  runtime = "python3.12"
+
+  filename         = "${path.module}/../../build/commerce-order-monitor.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../build/commerce-order-monitor.zip")
+
+  timeout     = 60
+  memory_size = 256
+
+  environment {
+    variables = {
+      COMMERCE_TABLE_NAME         = aws_dynamodb_table.commerce.name
+      EBAY_SECRET_ID              = "3-trading-agents/ebay-production"
+      ORDER_ALERT_TOPIC_ARN       = "arn:aws:sns:eu-west-2:${data.aws_caller_identity.commerce_current.account_id}:${var.project_name}-commerce-daily-watch"
+      REPLENISHMENT_FUNCTION_NAME = "${var.project_name}-commerce-replenishment"
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.commerce_lambda_basic,
+    aws_iam_role_policy.commerce_dynamodb,
+    aws_iam_role_policy.commerce_ebay_secret,
+    aws_iam_role_policy.commerce_order_monitor_actions
+  ]
+
+  tags = {
+    Project = var.project_name
+    Purpose = "ebay-sold-order-monitor"
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "commerce_order_monitor" {
+  name                = "${var.project_name}-commerce-order-monitor"
+  description         = "Check eBay for newly sold/unfulfilled orders every 5 minutes"
+  schedule_expression = "rate(5 minutes)"
+
+  tags = {
+    Project = var.project_name
+    Purpose = "ebay-sold-order-monitor"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "commerce_order_monitor" {
+  rule = aws_cloudwatch_event_rule.commerce_order_monitor.name
+  arn  = aws_lambda_function.commerce_order_monitor.arn
+}
+
+resource "aws_lambda_permission" "commerce_order_monitor_eventbridge" {
+  statement_id  = "AllowEventBridgeOrderMonitor"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.commerce_order_monitor.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.commerce_order_monitor.arn
+}
+
+output "commerce_order_monitor_lambda_name" {
+  value = aws_lambda_function.commerce_order_monitor.function_name
+}
+
+output "commerce_order_monitor_schedule" {
+  value = aws_cloudwatch_event_rule.commerce_order_monitor.schedule_expression
 }

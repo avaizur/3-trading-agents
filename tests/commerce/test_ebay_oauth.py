@@ -106,3 +106,12 @@ def test_exchange_decodes_url_encoded_authorization_code_before_posting():
 
     assert parse_qs(calls[0].decode("ascii"))["code"] == ["abc=4"]
 
+
+
+def test_authorization_url_includes_sell_fulfillment_scope():
+    url = ebay_oauth.build_authorization_url("public-client-id")
+    query = parse_qs(urlparse(url).query)
+
+    scopes = query["scope"][0].split()
+
+    assert "https://api.ebay.com/oauth/api_scope/sell.fulfillment" in scopes
