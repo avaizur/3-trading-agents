@@ -76,3 +76,33 @@ def test_get_inventory_quantity(monkeypatch):
         sku="SKU-1",
         token="TEST",
     ) == 0
+
+
+def test_update_live_quantity_surfaces_ebay_bulk_error(monkeypatch):
+    def fake_request(method, path, token, payload=None):
+        return {
+            "responses": [
+                {
+                    "sku": "SKU-1",
+                    "statusCode": 400,
+                    "errors": [
+                        {
+                            "message": "Inventory item cannot be updated."
+                        }
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(service, "_request", fake_request)
+
+    with pytest.raises(
+        service.EBayInventoryError,
+        match="status 400: Inventory item cannot be updated",
+    ):
+        service.update_live_quantity(
+            sku="SKU-1",
+            offer_id="12345",
+            quantity=1,
+            token="TEST-TOKEN",
+        )

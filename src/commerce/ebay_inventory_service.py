@@ -409,9 +409,18 @@ def update_live_quantity(
     status_code = int(response.get("statusCode", 0))
 
     if status_code < 200 or status_code >= 300:
-        raise EBayInventoryError(
-            f"eBay quantity update failed with status {status_code}."
-        )
+        safe_messages = [
+            str(item.get("message")).strip()
+            for item in response.get("errors", [])
+            if isinstance(item, dict) and item.get("message")
+        ]
+
+        message = f"eBay quantity update failed with status {status_code}"
+
+        if safe_messages:
+            message += ": " + " | ".join(safe_messages[:3])
+
+        raise EBayInventoryError(message)
 
     return {
         "sku": sku,

@@ -7,6 +7,7 @@ from decimal import Decimal
 from src.commerce.dynamo_storage import DynamoCommerceStore
 from src.commerce.adapters.registry import get_supplier_adapter
 from src.commerce.ebay_inventory_service import (
+    EBayInventoryError,
     get_inventory_quantity,
     load_access_token,
     update_live_quantity,
@@ -318,10 +319,18 @@ def lambda_handler(event, context):
 
         except Exception as exc:
             result["status"] = "ERROR"
+
+            if isinstance(exc, EBayInventoryError):
+                safe_detail = str(exc)
+            else:
+                safe_detail = type(exc).__name__
+
             result["reason"] = (
                 "eBay quantity update failed: "
-                f"{type(exc).__name__}"
+                f"{safe_detail}"
             )
+
+            print(result["reason"])
 
         _record_result(
             store=store,
