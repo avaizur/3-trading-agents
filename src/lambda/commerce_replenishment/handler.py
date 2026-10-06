@@ -225,10 +225,19 @@ def lambda_handler(event, context):
 
         except Exception as exc:
             result["status"] = "ERROR"
+
+            if isinstance(exc, EBayInventoryError):
+                safe_detail = str(exc)
+            else:
+                safe_detail = type(exc).__name__
+
             result["reason"] = (
                 "Unable to read current eBay quantity: "
-                f"{type(exc).__name__}"
+                f"{safe_detail}"
             )
+
+            print(result["reason"])
+
             _record_result(
                 store=store,
                 live=live,
