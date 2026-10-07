@@ -106,11 +106,38 @@ def test_replenishment_refreshes_supplier_cost_and_stock(monkeypatch):
         "update_live_quantity",
         lambda **kwargs: {"updated": True},
     )
+    monkeypatch.setattr(
+        handler,
+        "get_offer",
+        lambda **kwargs: {"status": "UNPUBLISHED"},
+    )
+
+    publish_calls = []
+
+    def fake_publish_offer(**kwargs):
+        publish_calls.append(kwargs)
+        return {
+            "listing_id": "LISTING-1",
+            "published": True,
+        }
+
+    monkeypatch.setattr(
+        handler,
+        "publish_offer",
+        fake_publish_offer,
+    )
 
     result = handler.lambda_handler({}, None)
 
     assert result["ok"] is True
     assert result["results"][0]["replenished"] is True
+    assert result["results"][0]["republished"] is True
+    assert publish_calls == [
+        {
+            "offer_id": "OFFER-1",
+            "token": "TOKEN",
+        }
+    ]
 
     assert product.supplier_cost == 6.50
     assert product.supplier_stock == 8

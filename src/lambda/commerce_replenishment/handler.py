@@ -9,7 +9,9 @@ from src.commerce.adapters.registry import get_supplier_adapter
 from src.commerce.ebay_inventory_service import (
     EBayInventoryError,
     get_inventory_quantity,
+    get_offer,
     load_access_token,
+    publish_offer,
     update_live_quantity,
 )
 from src.commerce.live_market_refresh import (
@@ -321,6 +323,25 @@ def lambda_handler(event, context):
                     quantity=1,
                     token=ebay_token,
                 )
+
+                offer = get_offer(
+                    sku=sku,
+                    token=ebay_token,
+                )
+
+                offer_status = (
+                    str((offer or {}).get("status", "")).upper()
+                )
+
+                if offer_status != "PUBLISHED":
+                    republished = publish_offer(
+                        offer_id=offer_id,
+                        token=ebay_token,
+                    )
+                    result["listing_id"] = republished["listing_id"]
+                    result["republished"] = True
+                else:
+                    result["republished"] = False
 
                 result["status"] = "REPLENISHED"
                 result["replenished"] = True
