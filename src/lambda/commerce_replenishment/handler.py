@@ -213,10 +213,34 @@ def lambda_handler(event, context):
             result["current_quantity"] = current_quantity
 
             if current_quantity > 0:
-                result["status"] = "IN_STOCK"
-                result["reason"] = (
-                    "Live eBay listing still has available quantity."
+                offer = get_offer(
+                    sku=sku,
+                    token=ebay_token,
                 )
+
+                offer_status = str(
+                    (offer or {}).get("status", "")
+                ).upper()
+
+                if offer_status != "PUBLISHED":
+                    republished = publish_offer(
+                        offer_id=offer_id,
+                        token=ebay_token,
+                    )
+                    result["listing_id"] = republished["listing_id"]
+                    result["republished"] = True
+                    result["status"] = "IN_STOCK"
+                    result["reason"] = (
+                        "Inventory quantity is available and the "
+                        "existing eBay offer was republished."
+                    )
+                else:
+                    result["republished"] = False
+                    result["status"] = "IN_STOCK"
+                    result["reason"] = (
+                        "Live eBay listing still has available quantity."
+                    )
+
                 _record_result(
                     store=store,
                     live=live,
