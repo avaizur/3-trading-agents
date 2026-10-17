@@ -123,7 +123,7 @@ resource "aws_lambda_function" "commerce_watch" {
   filename         = "${path.module}/../../build/commerce-watch.zip"
   source_code_hash = filebase64sha256("${path.module}/../../build/commerce-watch.zip")
 
-  timeout     = 120
+  timeout     = 300
   memory_size = 256
 
   environment {
