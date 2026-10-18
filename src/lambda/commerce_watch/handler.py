@@ -31,7 +31,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from src.commerce.approval_service import create_candidate_approval
+from src.commerce.approval_service import (
+    create_candidate_approval,
+    find_active_candidate_approval,
+)
 from src.commerce.listing_facts_store import ListingFactsStore
 from src.commerce.dynamo_storage import DynamoCommerceStore
 from src.commerce.live_market_refresh import (
@@ -216,6 +219,24 @@ def lambda_handler(event, context):
             }
         ).get("Item")
 
+        candidate_id = f"CAND-EBAY-{product.supplier_sku}"
+
+        active_approval = None
+        approval_lookup_failed = False
+
+        if not live_listing:
+            try:
+                active_approval = find_active_candidate_approval(
+                    table_name=table_name,
+                    candidate_id=candidate_id,
+                    region_name=aws_region,
+                )
+            except Exception:
+                # Fail safe: if we cannot prove there is no active
+                # human approval, do not let background automation
+                # alter the candidate lifecycle on this run.
+                approval_lookup_failed = True
+
         if live_listing:
             pipeline_evidence = {
                 "skipped": True,
@@ -225,6 +246,35 @@ def lambda_handler(event, context):
                 "human_approval_required": False,
             }
             pipeline_counts["ALREADY_LIVE"] += 1
+
+        elif active_approval:
+            pipeline_evidence = {
+                "skipped": True,
+                "reason": (
+                    "Candidate already has an active human approval; "
+                    "background three-agent processing is paused."
+                ),
+                "approval_id": active_approval["approval_id"],
+                "approval_expires_at": active_approval.get("expires_at"),
+                "approval_already_pending": True,
+                "human_approval_required": True,
+                "auto_approved": False,
+                "published": False,
+            }
+            pipeline_counts["AWAITING_HUMAN_APPROVAL"] += 1
+
+        elif approval_lookup_failed:
+            pipeline_evidence = {
+                "skipped": True,
+                "reason": (
+                    "Approval status could not be verified; "
+                    "background processing was skipped safely."
+                ),
+                "human_approval_required": True,
+                "auto_approved": False,
+                "published": False,
+            }
+            pipeline_counts["APPROVAL_CHECK_ERROR"] += 1
 
         elif (
             product.market_validation_status

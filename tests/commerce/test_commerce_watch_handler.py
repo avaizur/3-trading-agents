@@ -95,6 +95,11 @@ def _run_handler(store):
             "load_ebay_adapter",
             side_effect=RuntimeError("no ebay in tests"),
         ),
+        patch.object(
+            _handler_mod,
+            "find_active_candidate_approval",
+            return_value=None,
+        ),
     ):
         return _handler_mod.lambda_handler({}, None)
 
@@ -278,3 +283,69 @@ class TestMarketEvidenceReadyPassGate:
             profitable=False,
         )
         assert ThreeAgentPipeline.market_evidence_ready(product) is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: active human approval protection
+# ---------------------------------------------------------------------------
+
+
+class TestActiveApprovalProtection:
+    """An active human approval must pause background agent re-processing."""
+
+    def test_active_approval_skips_three_agent_pipeline(self):
+        product = _make_pass_product("PET-AWAITING-APPROVAL")
+        store = _build_fake_store([product])
+
+        active_approval = {
+            "approval_id": "approval-123",
+            "candidate_id": "CAND-EBAY-PET-AWAITING-APPROVAL",
+            "status": "PENDING",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "existing": True,
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {"COMMERCE_TABLE_NAME": "test-table"},
+            ),
+            patch.object(
+                _handler_mod,
+                "DynamoCommerceStore",
+                return_value=store,
+            ),
+            patch.object(
+                _handler_mod,
+                "load_ebay_adapter",
+                side_effect=RuntimeError("no ebay in tests"),
+            ),
+            patch.object(
+                _handler_mod,
+                "find_active_candidate_approval",
+                return_value=active_approval,
+            ),
+            patch.object(
+                _handler_mod.ThreeAgentPipeline,
+                "run",
+                side_effect=AssertionError(
+                    "Three-agent pipeline must not run while approval is active"
+                ),
+            ),
+        ):
+            result = _handler_mod.lambda_handler({}, None)
+
+        decision = result["decisions"][0]
+        pipeline = decision["pipeline"]
+
+        assert pipeline["skipped"] is True
+        assert pipeline["approval_already_pending"] is True
+        assert pipeline["approval_id"] == "approval-123"
+        assert pipeline["human_approval_required"] is True
+        assert pipeline["auto_approved"] is False
+        assert pipeline["published"] is False
+
+        assert (
+            result["pipeline_counts"]["AWAITING_HUMAN_APPROVAL"]
+            == 1
+        )
