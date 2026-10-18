@@ -14,11 +14,13 @@ from __future__ import annotations
 import importlib
 import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from src.commerce.schemas import (
+    CandidateStatus,
     MarketValidationStatus,
     PipelineGateStatus,
     ProductLane,
@@ -349,3 +351,223 @@ class TestActiveApprovalProtection:
             result["pipeline_counts"]["AWAITING_HUMAN_APPROVAL"]
             == 1
         )
+
+
+
+class TestApprovedCandidatePublishApproval:
+    """Approved candidates must go to final publish approval, never back through agents."""
+
+    def test_approved_candidate_gets_fresh_publish_approval_without_agents(self):
+        product = _make_pass_product("HB-PUBLISH-01")
+        store = _build_fake_store([product])
+
+        candidate_id = "CAND-EBAY-HB-PUBLISH-01"
+
+        approved_candidate = SimpleNamespace(
+            candidate_id=candidate_id,
+            sku=product.supplier_sku,
+            target_price=product.market_price,
+            status=CandidateStatus.APPROVED_FOR_LISTING,
+        )
+
+        draft = SimpleNamespace(
+            draft_id="DRAFT-EBAY-HB-PUBLISH-01",
+        )
+
+        listing_facts = {
+            "ebay_category_id": "167137",
+            "image_urls": [
+                "https://www.godropship.co.uk/uploadfile/images/test-1.jpg"
+            ],
+        }
+
+        publish_approval = {
+            "approval_id": "publish-approval-123",
+            "candidate_id": candidate_id,
+            "draft_id": draft.draft_id,
+            "sku": product.supplier_sku,
+            "offer_id": "offer-123",
+            "status": "PENDING_PUBLISH",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "review_url": "https://example.test/review?approval_id=publish-approval-123",
+            "existing": False,
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "COMMERCE_TABLE_NAME": "test-table",
+                    "APPROVAL_BASE_URL": "https://example.test/review",
+                },
+            ),
+            patch.object(
+                _handler_mod,
+                "DynamoCommerceStore",
+                return_value=store,
+            ),
+            patch.object(
+                _handler_mod,
+                "load_ebay_adapter",
+                side_effect=RuntimeError("no ebay in tests"),
+            ),
+            patch.object(
+                _handler_mod,
+                "find_active_candidate_approval",
+                return_value=None,
+            ),
+            patch.object(
+                store,
+                "get_candidate",
+                return_value=approved_candidate,
+            ),
+            patch.object(
+                store,
+                "get_draft_by_candidate_id",
+                return_value=draft,
+            ),
+            patch.object(
+                _handler_mod.ListingFactsStore,
+                "get",
+                return_value=listing_facts,
+            ),
+            patch.object(
+                _handler_mod,
+                "load_access_token",
+                return_value="fake-ebay-token",
+            ),
+            patch.object(
+                _handler_mod,
+                "prepare_offer",
+                return_value={"offer_id": "offer-123"},
+            ) as prepare_mock,
+            patch.object(
+                _handler_mod,
+                "create_publish_approval",
+                return_value=publish_approval,
+            ) as publish_approval_mock,
+            patch.object(
+                _handler_mod,
+                "create_candidate_approval",
+                side_effect=AssertionError(
+                    "First-stage approval must not be created "
+                    "for an already-approved candidate"
+                ),
+            ),
+            patch.object(
+                _handler_mod.ThreeAgentPipeline,
+                "run",
+                side_effect=AssertionError(
+                    "Three-agent pipeline must not rerun "
+                    "for an already-approved candidate"
+                ),
+            ),
+        ):
+            result = _handler_mod.lambda_handler({}, None)
+
+        pipeline = result["decisions"][0]["pipeline"]
+
+        assert pipeline["approval_stage"] == "PUBLISH"
+        assert pipeline["approval_request_created"] is True
+        assert pipeline["approval_id"] == "publish-approval-123"
+        assert pipeline["human_approval_required"] is True
+        assert pipeline["auto_approved"] is False
+        assert pipeline["published"] is False
+
+        prepare_mock.assert_called_once()
+        publish_approval_mock.assert_called_once()
+
+        assert (
+            result["pipeline_counts"]["AWAITING_PUBLISH_APPROVAL"]
+            == 1
+        )
+        assert result["actions_taken"]["published"] is False
+
+    def test_active_publish_approval_is_not_duplicated(self):
+        product = _make_pass_product("HB-PUBLISH-ACTIVE")
+        store = _build_fake_store([product])
+
+        candidate_id = "CAND-EBAY-HB-PUBLISH-ACTIVE"
+
+        approved_candidate = SimpleNamespace(
+            candidate_id=candidate_id,
+            sku=product.supplier_sku,
+            target_price=product.market_price,
+            status=CandidateStatus.APPROVED_FOR_LISTING,
+        )
+
+        active_approval = {
+            "approval_id": "active-publish-123",
+            "candidate_id": candidate_id,
+            "status": "PENDING_PUBLISH",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "existing": True,
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "COMMERCE_TABLE_NAME": "test-table",
+                    "APPROVAL_BASE_URL": "https://example.test/review",
+                },
+            ),
+            patch.object(
+                _handler_mod,
+                "DynamoCommerceStore",
+                return_value=store,
+            ),
+            patch.object(
+                _handler_mod,
+                "load_ebay_adapter",
+                side_effect=RuntimeError("no ebay in tests"),
+            ),
+            patch.object(
+                _handler_mod,
+                "find_active_candidate_approval",
+                return_value=active_approval,
+            ),
+            patch.object(
+                store,
+                "get_candidate",
+                return_value=approved_candidate,
+            ),
+            patch.object(
+                _handler_mod,
+                "create_publish_approval",
+                side_effect=AssertionError(
+                    "A second publish approval must not be created"
+                ),
+            ),
+            patch.object(
+                _handler_mod,
+                "prepare_offer",
+                side_effect=AssertionError(
+                    "Offer must not be rebuilt while a valid "
+                    "publish approval is active"
+                ),
+            ),
+            patch.object(
+                _handler_mod.ThreeAgentPipeline,
+                "run",
+                side_effect=AssertionError(
+                    "Three-agent pipeline must not rerun"
+                ),
+            ),
+        ):
+            result = _handler_mod.lambda_handler({}, None)
+
+        pipeline = result["decisions"][0]["pipeline"]
+
+        assert pipeline["approval_stage"] == "PUBLISH"
+        assert pipeline["approval_already_pending"] is True
+        assert pipeline["approval_id"] == "active-publish-123"
+        assert pipeline["human_approval_required"] is True
+        assert pipeline["auto_approved"] is False
+        assert pipeline["published"] is False
+
+        assert (
+            result["pipeline_counts"]["AWAITING_PUBLISH_APPROVAL"]
+            == 1
+        )
+        assert result["actions_taken"]["published"] is False

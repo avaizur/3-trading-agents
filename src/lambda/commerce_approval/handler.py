@@ -499,10 +499,32 @@ def lambda_handler(event, context):
                 params.get("token", "")
             )
 
+            approval_record = _get_approval(
+                approval_id
+            )
+
+            if approval_record is None:
+                raise ValueError(
+                    "Approval request was not found."
+                )
+
+            approval_status = str(
+                approval_record.get("status", "")
+            )
+
+            if approval_status not in {
+                "PENDING",
+                "PENDING_PUBLISH",
+            }:
+                raise ValueError(
+                    "Approval request is already "
+                    f"{approval_status or 'closed'}."
+                )
+
             approval = _validate_approval(
                 approval_id,
                 token,
-                "PENDING",
+                approval_status,
             )
 
             candidate = store.get_candidate(
@@ -513,6 +535,26 @@ def lambda_handler(event, context):
                 return _response(
                     404,
                     "<h2>Candidate not found.</h2>",
+                )
+
+            if approval_status == "PENDING_PUBLISH":
+                offer_id = str(
+                    approval.get("offer_id", "")
+                )
+
+                if not offer_id:
+                    raise ValueError(
+                        "Prepared eBay offer is missing."
+                    )
+
+                return _response(
+                    200,
+                    _publish_page(
+                        approval_id=approval_id,
+                        token=token,
+                        candidate=candidate,
+                        offer_id=offer_id,
+                    ),
                 )
 
             if (

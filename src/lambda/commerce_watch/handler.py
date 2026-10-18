@@ -33,6 +33,7 @@ from uuid import uuid4
 
 from src.commerce.approval_service import (
     create_candidate_approval,
+    create_publish_approval,
     find_active_candidate_approval,
 )
 from src.commerce.listing_facts_store import ListingFactsStore
@@ -41,7 +42,15 @@ from src.commerce.live_market_refresh import (
     load_ebay_adapter,
     refresh_product_market,
 )
-from src.commerce.schemas import MarketValidationStatus, PipelineGateStatus
+from src.commerce.ebay_inventory_service import (
+    load_access_token,
+    prepare_offer,
+)
+from src.commerce.schemas import (
+    CandidateStatus,
+    MarketValidationStatus,
+    PipelineGateStatus,
+)
 from src.commerce.three_agent_pipeline import ThreeAgentPipeline
 
 
@@ -246,6 +255,128 @@ def lambda_handler(event, context):
                 "human_approval_required": False,
             }
             pipeline_counts["ALREADY_LIVE"] += 1
+
+        elif (
+            (existing_candidate := store.get_candidate(candidate_id))
+            is not None
+            and existing_candidate.status
+            is CandidateStatus.APPROVED_FOR_LISTING
+            and active_approval
+            and active_approval.get("status") == "PENDING_PUBLISH"
+        ):
+            pipeline_evidence = {
+                "skipped": True,
+                "reason": (
+                    "Candidate already has an active final publish approval."
+                ),
+                "approval_id": active_approval["approval_id"],
+                "approval_expires_at": active_approval.get("expires_at"),
+                "approval_already_pending": True,
+                "approval_stage": "PUBLISH",
+                "human_approval_required": True,
+                "auto_approved": False,
+                "published": False,
+            }
+
+            pipeline_counts[
+                "AWAITING_PUBLISH_APPROVAL"
+            ] += 1
+
+        elif (
+            existing_candidate is not None
+            and existing_candidate.status
+            is CandidateStatus.APPROVED_FOR_LISTING
+        ):
+            try:
+                draft = store.get_draft_by_candidate_id(
+                    candidate_id
+                )
+
+                if draft is None:
+                    raise ValueError(
+                        "Approved candidate has no listing draft."
+                    )
+
+                listing_facts = ListingFactsStore(
+                    table_name=table_name,
+                    region_name=aws_region,
+                ).get(
+                    sku=product.supplier_sku,
+                )
+
+                if not listing_facts:
+                    raise ValueError(
+                        "Verified eBay listing facts are not ready."
+                    )
+
+                ebay_token = load_access_token(
+                    region=aws_region
+                )
+
+                prepared = prepare_offer(
+                    sku=existing_candidate.sku,
+                    price=existing_candidate.target_price,
+                    facts=listing_facts,
+                    token=ebay_token,
+                    quantity=1,
+                )
+
+                publish_approval = create_publish_approval(
+                    table_name=table_name,
+                    candidate_id=candidate_id,
+                    draft_id=draft.draft_id,
+                    sku=existing_candidate.sku,
+                    offer_id=str(prepared["offer_id"]),
+                    approval_base_url=approval_base_url,
+                    region_name=aws_region,
+                )
+
+                pipeline_evidence = {
+                    "skipped": True,
+                    "reason": (
+                        "Candidate is already approved for listing; "
+                        "prepared eBay offer refreshed and final "
+                        "publish approval issued."
+                    ),
+                    "approval_id": publish_approval["approval_id"],
+                    "approval_expires_at": (
+                        publish_approval["expires_at"]
+                    ),
+                    "approval_request_created": True,
+                    "approval_url": publish_approval["review_url"],
+                    "approval_stage": "PUBLISH",
+                    "draft_id": draft.draft_id,
+                    "offer_id": str(prepared["offer_id"]),
+                    "human_approval_required": True,
+                    "auto_approved": False,
+                    "published": False,
+                }
+
+                pipeline_counts[
+                    "AWAITING_PUBLISH_APPROVAL"
+                ] += 1
+
+            except Exception as publish_exc:
+                pipeline_evidence = {
+                    "skipped": True,
+                    "reason": (
+                        "Candidate is already approved for listing, "
+                        "but final publish approval could not be prepared."
+                    ),
+                    "approval_request_created": False,
+                    "approval_error": (
+                        "Publish approval failed: "
+                        f"{type(publish_exc).__name__}: "
+                        f"{publish_exc}"
+                    ),
+                    "human_approval_required": True,
+                    "auto_approved": False,
+                    "published": False,
+                }
+
+                pipeline_counts[
+                    "PUBLISH_APPROVAL_ERROR"
+                ] += 1
 
         elif active_approval:
             pipeline_evidence = {
