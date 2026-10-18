@@ -357,6 +357,20 @@ class DynamoCommerceStore:
         self,
         candidate_id: str,
     ) -> Optional[EBayListingDraft]:
+        candidate = self.get_candidate(candidate_id)
+
+        if candidate is not None and candidate.sku:
+            direct_draft = self.get_draft(
+                f"DRAFT-EBAY-{candidate.sku}"
+            )
+
+            if (
+                direct_draft is not None
+                and direct_draft.candidate_id == candidate_id
+            ):
+                return direct_draft
+
+        # Compatibility fallback for legacy or non-standard draft IDs.
         for draft in self.list_drafts(limit=10000):
             if draft.candidate_id == candidate_id:
                 return draft
