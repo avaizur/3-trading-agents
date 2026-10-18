@@ -88,13 +88,29 @@ class DynamoCommerceStore:
         }
 
     def _scan_entity(self, entity_type: str) -> list[dict]:
-        response = self.table.scan(
-            FilterExpression="entity_type = :entity_type",
-            ExpressionAttributeValues={
-                ":entity_type": entity_type,
-            },
-        )
-        return response.get("Items", [])
+        items: list[dict] = []
+        exclusive_start_key = None
+
+        while True:
+            scan_kwargs = {
+                "FilterExpression": "entity_type = :entity_type",
+                "ExpressionAttributeValues": {
+                    ":entity_type": entity_type,
+                },
+            }
+
+            if exclusive_start_key is not None:
+                scan_kwargs["ExclusiveStartKey"] = exclusive_start_key
+
+            response = self.table.scan(**scan_kwargs)
+            items.extend(response.get("Items", []))
+
+            exclusive_start_key = response.get("LastEvaluatedKey")
+
+            if not exclusive_start_key:
+                break
+
+        return items
 
     # ------------------------------------------------------------------
     # Supplier-backed products

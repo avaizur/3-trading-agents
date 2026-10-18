@@ -278,3 +278,67 @@ def test_agent_evaluation_round_trip():
     assert loaded[0].agent_role == AgentRole.SCOUT
     assert loaded[0].recommendation == "PROCEED"
     assert loaded[0].evidence_snapshot == {"market": "healthy"}
+
+
+def test_get_draft_by_candidate_id_finds_second_scan_page():
+    class PaginatedFakeTable(FakeTable):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def scan(self, **kwargs):
+            self.calls += 1
+
+            if self.calls == 1:
+                return {
+                    "Items": [],
+                    "LastEvaluatedKey": {
+                        "PK": "PAGE1",
+                        "SK": "META",
+                    },
+                }
+
+            return {
+                "Items": [
+                    {
+                        "PK": "DRAFT#DRAFT-EBAY-HB-76733",
+                        "SK": "META",
+                        "entity_type": "EBAY_LISTING_DRAFT",
+                        "draft_id": "DRAFT-EBAY-HB-76733",
+                        "candidate_id": "CAND-EBAY-HB-76733",
+                        "supplier_reference": "Go Dropship",
+                        "sku": "HB-76733",
+                        "title": "12L Galvanised Steel Bucket",
+                        "price": 12.91,
+                        "quantity": 1,
+                        "description": "Test listing description",
+                        "expected_profit": 5.91,
+                        "expected_margin": 0.4578,
+                        "status": "READY_FOR_REVIEW",
+                        "human_approval_required": True,
+                    }
+                ]
+            }
+
+    class PaginatedFakeResource:
+        def __init__(self):
+            self.table = PaginatedFakeTable()
+
+        def Table(self, table_name):
+            return self.table
+
+    resource = PaginatedFakeResource()
+
+    store = DynamoCommerceStore(
+        table_name="test-commerce",
+        dynamodb_resource=resource,
+    )
+
+    draft = store.get_draft_by_candidate_id(
+        "CAND-EBAY-HB-76733"
+    )
+
+    assert draft is not None
+    assert draft.draft_id == "DRAFT-EBAY-HB-76733"
+    assert draft.candidate_id == "CAND-EBAY-HB-76733"
+    assert resource.table.calls == 2
