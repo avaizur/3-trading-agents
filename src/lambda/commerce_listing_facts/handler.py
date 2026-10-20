@@ -8,7 +8,7 @@ from src.commerce.dynamo_storage import DynamoCommerceStore
 from src.commerce.ebay_listing_facts_builder import (
     build_verified_listing_facts,
 )
-from src.commerce.godropship_discovery import _fetch
+from src.commerce.godropship_discovery import _fetch, is_robot_verification_page
 from src.commerce.listing_facts_store import ListingFactsStore
 
 
@@ -46,6 +46,14 @@ def lambda_handler(event, context):
         }
 
     supplier_html = _fetch(source_url)
+
+    if is_robot_verification_page(supplier_html):
+        return {
+            "ok": False,
+            "status": "SUPPLIER_VERIFICATION_REQUIRED",
+            "supplier_sku": supplier_sku,
+            "reason": "Supplier returned a robot-verification page.",
+        }
 
     facts = build_verified_listing_facts(
         title=product.product_name,

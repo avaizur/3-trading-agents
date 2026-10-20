@@ -404,3 +404,8 @@ def save_new_products(store, products) -> dict:
         "imported": imported,
         "already_present": existing,
     }
+
+
+def is_robot_verification_page(document: str) -> bool:
+    """Detect Go Dropship robot-verification responses."""
+    return "VERYFICATIONROBOTFORM" in document.upper()

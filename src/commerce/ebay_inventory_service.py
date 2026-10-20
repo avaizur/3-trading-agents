@@ -154,6 +154,24 @@ def validate_listing_facts(facts: dict[str, Any]) -> None:
             + ", ".join(missing)
         )
 
+    for url in facts["image_urls"]:
+        if not isinstance(url, str):
+            raise ValueError("Invalid supplier image: URL must be text.")
+
+        parsed = urllib.parse.urlsplit(url.strip())
+        path = parsed.path.casefold()
+
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").casefold()
+            not in {"www.godropship.co.uk", "godropship.co.uk"}
+            or not path.startswith("/uploadfile/")
+            or "thumbnail_" in path
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError(f"Invalid supplier image: {url}")
+
 
 def prepare_offer(
     *,
