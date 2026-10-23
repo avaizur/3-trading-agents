@@ -375,6 +375,9 @@ class TestApprovedCandidatePublishApproval:
         )
 
         listing_facts = {
+            "ebay_title": "Validated Pet Feeder",
+            "condition": "NEW",
+            "aspects": {"Brand": ["Unbranded"]},
             "ebay_category_id": "167137",
             "image_urls": [
                 "https://www.godropship.co.uk/uploadfile/images/test-1.jpg"
@@ -571,3 +574,107 @@ class TestApprovedCandidatePublishApproval:
             == 1
         )
         assert result["actions_taken"]["published"] is False
+
+
+class TestAsyncListingFacts:
+    def test_request_is_async_bounded_and_atomically_deduplicated(self):
+        from unittest.mock import Mock
+        from botocore.exceptions import ClientError
+
+        table = Mock()
+        client = Mock()
+        client.invoke.return_value = {"StatusCode": 202}
+        product = _make_pass_product()
+        with patch.object(_handler_mod.boto3, "client", return_value=client) as factory:
+            assert _handler_mod._request_listing_facts(table, product, "facts", "eu-west-2") == "QUEUED"
+            claim = table.put_item.call_args.kwargs
+            assert claim["ConditionExpression"] == "attribute_not_exists(PK) OR expires_at <= :now"
+            assert claim["Item"]["expires_at"] - claim["ExpressionAttributeValues"][":now"] == 7 * 3600
+            assert client.invoke.call_args.kwargs["InvocationType"] == "Event"
+            config = factory.call_args.kwargs["config"]
+            assert config.read_timeout == 5
+            assert config.retries["total_max_attempts"] == 1
+            table.put_item.side_effect = ClientError(
+                {"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem"
+            )
+            assert _handler_mod._request_listing_facts(table, product, "facts", "eu-west-2") == "PENDING"
+            assert client.invoke.call_count == 1
+
+    def test_invoke_failure_keeps_lease(self):
+        from unittest.mock import Mock
+
+        table = Mock()
+        client = Mock()
+        client.invoke.side_effect = TimeoutError("response lost")
+        with patch.object(_handler_mod.boto3, "client", return_value=client):
+            with pytest.raises(TimeoutError):
+                _handler_mod._request_listing_facts(table, _make_pass_product(), "facts", "eu-west-2")
+        table.put_item.assert_called_once()
+        table.delete_item.assert_not_called()
+
+    @pytest.mark.parametrize("facts", [None, {}, {"listing_facts_complete": False, "ebay_title": "incomplete"}])
+    def test_missing_facts_remain_pending_without_approval(self, facts):
+        from unittest.mock import Mock
+
+        store = _build_fake_store([_make_pass_product()])
+        pipeline_result = SimpleNamespace(
+            pipeline_run_id="test-run",
+            gate_status=PipelineGateStatus.READY_FOR_HUMAN_REVIEW,
+            queue_status=SimpleNamespace(value="READY_FOR_HUMAN_REVIEW"),
+            scout_eval=SimpleNamespace(recommendation="PASS"),
+            commercial_eval=SimpleNamespace(expected_margin=0.2307),
+            critic_eval=SimpleNamespace(recommendation=SimpleNamespace(value="PASS")),
+            reasons=[],
+        )
+        with (
+            patch.object(_handler_mod.ThreeAgentPipeline, "run", return_value=pipeline_result),
+            patch.object(_handler_mod, "ListingFactsStore", return_value=Mock(get=Mock(return_value=facts))),
+            patch.object(_handler_mod, "_request_listing_facts", return_value="QUEUED") as request,
+            patch.object(_handler_mod, "create_candidate_approval") as approval,
+            patch.dict(os.environ, {"LISTING_FACTS_FUNCTION_NAME": "facts", "APPROVAL_BASE_URL": "https://review.example"}),
+        ):
+            result = _run_handler(store)
+        evidence = result["decisions"][0]["pipeline"]
+        assert evidence["listing_facts_status"] == "PENDING"
+        assert evidence["approval_request_created"] is False
+        assert evidence["human_approval_required"] is True
+        approval.assert_not_called()
+        request.assert_called_once()
+
+    def test_low_time_saves_partial_summary(self):
+        store = _build_fake_store([_make_pass_product()])
+        with patch.object(_handler_mod, "_time_low", return_value=True):
+            result = _run_handler(store)
+        assert result["partial"] is True
+        assert result["processed_product_count"] == 0
+        assert result["stop_reason"] == "LOW_REMAINING_EXECUTION_TIME"
+        summaries = [item for item in store.table.items.values() if item.get("entity_type") == "COMMERCE_WATCH_RUN"]
+        assert len(summaries) == 1
+        assert summaries[0]["partial"] is True
+
+    def test_time_guard_preserves_completed_decisions(self):
+        store = _build_fake_store([_make_pending_product("ONE"), _make_pending_product("TWO")])
+        with patch.object(_handler_mod, "_time_low", side_effect=[False, False, False, True]):
+            result = _run_handler(store)
+        assert result["partial"] is True
+        assert result["processed_product_count"] == 1
+        assert len(result["decisions"]) == 1
+
+    def test_context_reserve_threshold(self):
+        from unittest.mock import Mock
+
+        context = Mock()
+        context.get_remaining_time_in_millis.return_value = 60_000
+        assert _handler_mod._time_low(context) is True
+        context.get_remaining_time_in_millis.return_value = 60_001
+        assert _handler_mod._time_low(context) is False
+
+    def test_claim_failure_does_not_invoke(self):
+        from unittest.mock import Mock
+
+        table = Mock()
+        table.put_item.side_effect = RuntimeError("Dynamo unavailable")
+        with patch.object(_handler_mod.boto3, "client") as client:
+            with pytest.raises(RuntimeError):
+                _handler_mod._request_listing_facts(table, _make_pass_product(), "facts", "eu-west-2")
+        client.assert_not_called()

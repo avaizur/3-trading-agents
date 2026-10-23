@@ -26,6 +26,8 @@ import os
 import json
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -55,6 +57,58 @@ from src.commerce.three_agent_pipeline import ThreeAgentPipeline
 
 
 MARKET_EVIDENCE_MAX_AGE = timedelta(hours=24)
+
+
+SUMMARY_RESERVE_MS = 60_000
+# Cover the default six-hour async event age plus retries and runtime.
+FACTS_REQUEST_LEASE = timedelta(hours=7)
+
+
+def _time_low(context):
+    return context is not None and context.get_remaining_time_in_millis() <= SUMMARY_RESERVE_MS
+
+
+def _facts_ready(facts):
+    return bool(facts) and facts.get("listing_facts_complete") is not False and all(
+        facts.get(key)
+        for key in ("ebay_title", "ebay_category_id", "image_urls", "condition", "aspects")
+    )
+
+
+def _request_listing_facts(table, product, function_name, region):
+    now = _utc_now()
+    # Serialize concurrent Watch runs. Retain the lease on ambiguous failures:
+    # AWS may have accepted the event even if the response was lost.
+    try:
+        table.put_item(
+            Item={
+                "PK": f"LISTING_FACTS_REQUEST#EBAY#{product.supplier_sku}",
+                "SK": "META",
+                "entity_type": "LISTING_FACTS_REQUEST",
+                "expires_at": int((now + FACTS_REQUEST_LEASE).timestamp()),
+            },
+            ConditionExpression="attribute_not_exists(PK) OR expires_at <= :now",
+            ExpressionAttributeValues={":now": int(now.timestamp())},
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return "PENDING"
+        raise
+    client = boto3.client(
+        "lambda", region_name=region,
+        config=Config(connect_timeout=3, read_timeout=5, retries={"total_max_attempts": 1}),
+    )
+    response = client.invoke(
+        FunctionName=function_name,
+        InvocationType="Event",
+        Payload=json.dumps({
+            "supplier_name": product.supplier_name,
+            "supplier_sku": product.supplier_sku,
+        }).encode("utf-8"),
+    )
+    if response.get("StatusCode") != 202:
+        raise RuntimeError("Listing Facts asynchronous request was not accepted.")
+    return "QUEUED"
 
 
 def _utc_now() -> datetime:
@@ -150,7 +204,11 @@ def lambda_handler(event, context):
     decisions = []
     adapter = None
 
+    partial = False
     for product in products:
+        if _time_low(context):
+            partial = True
+            break
         supplier_counts[product.supplier_name] += 1
 
         initial_status, initial_reason = _watch_status(
@@ -211,6 +269,10 @@ def lambda_handler(event, context):
                 initial_reason,
             )
 
+        if _time_low(context):
+            partial = True
+            break
+
         watch_counts[watch_status] += 1
 
         # --------------------------------------------------------------
@@ -245,6 +307,10 @@ def lambda_handler(event, context):
                 # human approval, do not let background automation
                 # alter the candidate lifecycle on this run.
                 approval_lookup_failed = True
+
+        if _time_low(context):
+            partial = True
+            break
 
         if live_listing:
             pipeline_evidence = {
@@ -304,7 +370,7 @@ def lambda_handler(event, context):
                     sku=product.supplier_sku,
                 )
 
-                if not listing_facts:
+                if not _facts_ready(listing_facts):
                     raise ValueError(
                         "Verified eBay listing facts are not ready."
                     )
@@ -421,6 +487,10 @@ def lambda_handler(event, context):
                     persist_history=True,
                 )
 
+                if _time_low(context):
+                    partial = True
+                    break
+
                 gate_value = pipeline_result.gate_status.value
 
                 pipeline_evidence = {
@@ -488,58 +558,19 @@ def lambda_handler(event, context):
                         sku=product.supplier_sku,
                     )
 
-                    # If verified listing facts do not exist yet, ask the
-                    # dedicated listing-facts Lambda to build them. It may
-                    # safely refuse when required eBay facts cannot be
-                    # evidenced from the supplier.
-                    listing_facts_function = os.getenv(
-                        "LISTING_FACTS_FUNCTION_NAME"
-                    )
-
-                    if not listing_facts and listing_facts_function:
+                    listing_facts_function = os.getenv("LISTING_FACTS_FUNCTION_NAME")
+                    if not _facts_ready(listing_facts) and listing_facts_function:
                         try:
-                            lambda_client = boto3.client(
-                                "lambda",
-                                region_name=aws_region,
+                            pipeline_evidence["listing_facts_build_status"] = (
+                                _request_listing_facts(
+                                    store.table, product, listing_facts_function, aws_region
+                                ) if not _time_low(context) else "DEFERRED"
                             )
-
-                            build_response = lambda_client.invoke(
-                                FunctionName=listing_facts_function,
-                                InvocationType="RequestResponse",
-                                Payload=json.dumps(
-                                    {
-                                        "supplier_name": product.supplier_name,
-                                        "supplier_sku": product.supplier_sku,
-                                    }
-                                ).encode("utf-8"),
-                            )
-
-                            build_result = json.loads(
-                                build_response["Payload"].read()
-                                or b"{}"
-                            )
-
-                            pipeline_evidence[
-                                "listing_facts_build_status"
-                            ] = build_result.get("status")
-
-                            if build_result.get("status") == "LISTING_FACTS_READY":
-                                listing_facts = ListingFactsStore(
-                                    table_name=table_name,
-                                    region_name=aws_region,
-                                ).get(
-                                    sku=product.supplier_sku,
-                                )
-
                         except Exception as facts_exc:
-                            pipeline_evidence[
-                                "listing_facts_build_status"
-                            ] = "ERROR"
-                            pipeline_evidence[
-                                "listing_facts_build_error"
-                            ] = str(facts_exc)
+                            pipeline_evidence["listing_facts_build_status"] = "ERROR"
+                            pipeline_evidence["listing_facts_build_error"] = str(facts_exc)
 
-                    if not listing_facts:
+                    if not _facts_ready(listing_facts):
                         pipeline_evidence[
                             "listing_facts_ready"
                         ] = False
@@ -554,9 +585,7 @@ def lambda_handler(event, context):
                         ] = (
                             "Verified eBay listing facts are not ready."
                         )
-                        pipeline_evidence[
-                            "human_approval_required"
-                        ] = False
+                        pipeline_evidence["listing_facts_status"] = "PENDING"
 
                     elif approval_base_url:
                         pipeline_evidence[
@@ -657,6 +686,9 @@ def lambda_handler(event, context):
         "watch_run_id": watch_run_id,
         "started_at": now.isoformat(),
         "product_count": len(products),
+        "processed_product_count": len(decisions),
+        "partial": partial,
+        "stop_reason": "LOW_REMAINING_EXECUTION_TIME" if partial else None,
         "supplier_counts": dict(supplier_counts),
         "watch_counts": dict(watch_counts),
         "refresh_counts": dict(refresh_counts),
